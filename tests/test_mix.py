@@ -275,6 +275,44 @@ def test_collect_mix_reports_progress(monkeypatch) -> None:
     assert any("Collected alpha" in message and "scanned=1" in message for message in messages)
 
 
+def test_collect_mix_closes_stream_iterator_after_collecting_needed_rows(monkeypatch) -> None:
+    class ClosableRows:
+        def __init__(self) -> None:
+            self.closed = False
+            self.rows = iter(
+                [
+                    {"id": "one", "messages": [{"role": "user", "content": "hi"}]},
+                    {"id": "two", "messages": [{"role": "user", "content": "there"}]},
+                ]
+            )
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            return next(self.rows)
+
+        def close(self) -> None:
+            self.closed = True
+
+    stream = ClosableRows()
+
+    def fake_stream_rows(dataset_id, config, split, seed, buffer_size):
+        return stream
+
+    monkeypatch.setattr(mix, "stream_rows", fake_stream_rows)
+
+    rows_by_split = mix.collect_mix(
+        {
+            "id": "sample",
+            "sources": [{"name": "alpha", "dataset_id": "org/alpha", "split": "train", "count": 1}],
+        }
+    )
+
+    assert len(rows_by_split["train"]) == 1
+    assert stream.closed is True
+
+
 def test_mix_hash_ignores_output_but_changes_for_seed() -> None:
     base = {
         "id": "sample",

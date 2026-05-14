@@ -120,7 +120,7 @@ uv run datamixxer inspect HuggingFaceTB/smoltalk2                          # lis
 uv run datamixxer add-source my_mix.yaml --name math --dataset org/math --split train --count 1000
 uv run datamixxer doctor my_mix.yaml --sample-rows 5                       # validate shape, source access, and sample rows
 uv run datamixxer validate my_mix.yaml                                     # validate config shape
-uv run datamixxer check my_mix.yaml                                        # validate config and source access
+uv run datamixxer validate my_mix.yaml --check-sources                     # validate config and source access
 uv run datamixxer validate my_mix.yaml --sample-rows 5                     # catch row-schema issues such as bad dedupe fields
 uv run datamixxer plan my_mix.yaml                                         # preview composition, hash, and output path
 uv run datamixxer plan my_mix.yaml --sample-rows 3                         # preview composition and row examples
@@ -159,9 +159,9 @@ uv run ruff check .                                                        # run
   `publish --check` before a long build to verify authentication and target repo
   access. The check is non-mutating; upload commands create the target repo when
   needed.
-- `validate` catches shape errors and unedited starter placeholders. `check`
-  also verifies that every configured Hugging Face dataset/config/split can be
-  reached before starting a streaming build.
+- `validate` catches shape errors and unedited starter placeholders. Add
+  `--check-sources` to verify that every configured Hugging Face
+  dataset/config/split can be reached before starting a streaming build.
 - `plan` prints a copy-friendly `Short hash`; add `--sample-rows` for row
   examples or `--explain-hash` to print the full hash and normalized hash inputs.
 

@@ -1,0 +1,19 @@
+id: tutorial_mix
+name: Tutorial Mix
+version: v1
+seed: 3407
+buffer_size: 10000
+dedupe: true
+split:
+  test_size: '0.2'
+sources:
+- name: rotten_tomatoes
+  dataset_id: rotten_tomatoes
+  split: train
+  count: 20
+output:
+  store_dir: .datamixxer/mixes
+  train_file: train.jsonl
+  test_file: test.jsonl
+  push_to_hub: false
+  hub: {}

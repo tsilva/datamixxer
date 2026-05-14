@@ -91,24 +91,6 @@ def main() -> None:
         help="stream this many rows per source to validate row-dependent settings such as dedupe fields",
     )
 
-    check = subparsers.add_parser(
-        "check",
-        help="Validate config and verify Hugging Face source access",
-        description="Validate config shape, verify dataset/config/split access, and optionally sample rows.",
-    )
-    check.add_argument("config", help="YAML mix config")
-    check.add_argument(
-        "--push-to-hub",
-        action="store_true",
-        help="also require Hub publishing settings to be present",
-    )
-    check.add_argument(
-        "--sample-rows",
-        type=int,
-        default=0,
-        help="stream this many rows per source to validate row-dependent settings such as dedupe fields",
-    )
-
     doctor = subparsers.add_parser(
         "doctor",
         help="Run config, source, sample, and optional Hub checks",
@@ -235,14 +217,6 @@ Use --force to rebuild anyway.""",
             if args.check_sources:
                 raise_if_issues("Source access check failed", check_source_access(config))
                 print("Source access OK.")
-            if args.sample_rows:
-                raise_if_issues("Sample row validation failed", validate_sample_rows(config, args.sample_rows))
-                print(f"Sample row validation OK ({args.sample_rows} rows per source).")
-            print(f"Config is valid: {args.config}")
-        elif args.command == "check":
-            config = validate_config_file(args.config, require_hub=args.push_to_hub)
-            raise_if_issues("Source access check failed", check_source_access(config))
-            print("Source access OK.")
             if args.sample_rows:
                 raise_if_issues("Sample row validation failed", validate_sample_rows(config, args.sample_rows))
                 print(f"Sample row validation OK ({args.sample_rows} rows per source).")

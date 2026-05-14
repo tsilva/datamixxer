@@ -120,11 +120,18 @@ class RowSample:
 
 
 def stream_rows(dataset_id: str, config: str | None, split: str, seed: int, buffer_size: int):
-    from datasets import load_dataset
+    from datasets import disable_progress_bar, load_dataset
 
+    disable_progress_bar()
     dataset = load_dataset(dataset_id, config, split=split, streaming=True)
     shuffled = dataset.shuffle(seed=seed, buffer_size=buffer_size)
     yield from shuffled
+
+
+def close_iterator(iterator: Any) -> None:
+    close = getattr(iterator, "close", None)
+    if callable(close):
+        close()
 
 
 def write_config_template(path: str | Path, *, overwrite: bool = False, empty: bool = False) -> Path:
@@ -296,6 +303,7 @@ def validate_sample_rows(config: dict[str, Any], sample_rows: int) -> list[str]:
     buffer_size = int(config.get("buffer_size", 10_000))
     dedupe_config = config.get("dedupe", True)
     for source in normalize_sources(config):
+        iterator = None
         try:
             iterator = stream_rows(
                 source.dataset_id,
@@ -316,6 +324,9 @@ def validate_sample_rows(config: dict[str, Any], sample_rows: int) -> list[str]:
                 errors.append(f"{source.name}: no dictionary rows found in the first sampled rows")
         except Exception as exc:
             errors.append(f"{source.name}: sampled row validation failed: {exc}")
+        finally:
+            if iterator is not None:
+                close_iterator(iterator)
     return errors
 
 
@@ -329,6 +340,8 @@ def collect_row_samples(config: dict[str, Any], sample_rows: int) -> list[RowSam
     dedupe_config = config.get("dedupe", True)
     samples: list[RowSample] = []
     for source in normalize_sources(config):
+        rows: list[dict[str, Any]] = []
+        scanned = 0
         iterator = stream_rows(
             source.dataset_id,
             source.config,
@@ -336,16 +349,17 @@ def collect_row_samples(config: dict[str, Any], sample_rows: int) -> list[RowSam
             seed + source.index,
             buffer_size,
         )
-        rows: list[dict[str, Any]] = []
-        scanned = 0
-        for row in iterator:
-            scanned += 1
-            if not isinstance(row, dict):
-                continue
-            dedupe_key(row, dedupe_config)
-            rows.append(row)
-            if len(rows) >= sample_rows:
-                break
+        try:
+            for row in iterator:
+                scanned += 1
+                if not isinstance(row, dict):
+                    continue
+                dedupe_key(row, dedupe_config)
+                rows.append(row)
+                if len(rows) >= sample_rows:
+                    break
+        finally:
+            close_iterator(iterator)
         if not rows:
             raise RuntimeError(f"{source.name}: no dictionary rows found in sampled source rows")
         samples.append(RowSample(source=source, rows=rows, scanned=scanned))
@@ -589,29 +603,32 @@ def collect_mix(config: dict[str, Any], progress: Progress | None = None) -> dic
         )
         start = perf_counter()
 
-        for row in iterator:
-            scanned += 1
-            if not isinstance(row, dict):
-                skipped_non_dict += 1
-                continue
-            key = dedupe_key(row, dedupe_config)
-            if key is not None and key in seen_keys:
-                duplicates += 1
-                continue
-            if key is not None:
-                seen_keys.add(key)
-            collected.append(row)
-            if len(collected) >= needed:
-                break
-            if progress and scanned % _progress_interval(needed) == 0:
-                elapsed = max(perf_counter() - start, 0.001)
-                rate = scanned / elapsed
-                progress(
-                    "Progress "
-                    f"{source.name}: collected={len(collected)}/{needed} "
-                    f"scanned={scanned} duplicates={duplicates} "
-                    f"skipped_non_dict={skipped_non_dict} rate={rate:.1f} rows/s"
-                )
+        try:
+            for row in iterator:
+                scanned += 1
+                if not isinstance(row, dict):
+                    skipped_non_dict += 1
+                    continue
+                key = dedupe_key(row, dedupe_config)
+                if key is not None and key in seen_keys:
+                    duplicates += 1
+                    continue
+                if key is not None:
+                    seen_keys.add(key)
+                collected.append(row)
+                if len(collected) >= needed:
+                    break
+                if progress and scanned % _progress_interval(needed) == 0:
+                    elapsed = max(perf_counter() - start, 0.001)
+                    rate = scanned / elapsed
+                    progress(
+                        "Progress "
+                        f"{source.name}: collected={len(collected)}/{needed} "
+                        f"scanned={scanned} duplicates={duplicates} "
+                        f"skipped_non_dict={skipped_non_dict} rate={rate:.1f} rows/s"
+                    )
+        finally:
+            close_iterator(iterator)
 
         if len(collected) != needed:
             raise RuntimeError(
