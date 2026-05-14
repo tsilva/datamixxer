@@ -6,10 +6,12 @@ import datamixxer.hub as hub
 import datamixxer.mix as mix
 import pytest
 from datamixxer.cli import print_mix_plan
+from datamixxer.io import read_yaml
 from datamixxer.mix import (
     add_source_to_config,
     build_mix,
     check_source_access,
+    collect_row_samples,
     dedupe_key,
     explain_hash,
     hub_check_for_config,
@@ -24,6 +26,7 @@ from datamixxer.mix import (
     validate_config,
     validate_config_file,
     validate_sample_rows,
+    write_new_config,
     write_config_template,
 )
 
@@ -131,6 +134,37 @@ def test_write_config_template_refuses_existing_file(tmp_path) -> None:
 
     write_config_template(config_path, overwrite=True)
     assert "sources:" in config_path.read_text(encoding="utf-8")
+
+
+def test_write_empty_config_template_has_no_placeholder_sources(tmp_path) -> None:
+    config_path = tmp_path / "mix.yaml"
+
+    write_config_template(config_path, empty=True)
+
+    config = read_yaml(config_path)
+    assert config["sources"] == []
+
+
+def test_write_new_config_creates_valid_first_source(tmp_path) -> None:
+    config_path = tmp_path / "math-mix.yaml"
+
+    write_new_config(
+        config_path,
+        dataset_id="org/math",
+        dataset_config="default",
+        split="train",
+        count=25,
+        repo_id="owner/math-mix",
+    )
+
+    config = validate_config_file(config_path)
+    sources = normalize_sources(config)
+    assert config["id"] == "math_mix"
+    assert sources[0].name == "math"
+    assert sources[0].dataset_id == "org/math"
+    assert sources[0].config == "default"
+    assert sources[0].count == 25
+    assert config["output"]["hub"]["repo_id"] == "owner/math-mix"
 
 
 def test_validate_config_rejects_unedited_starter_placeholders(tmp_path) -> None:
@@ -467,6 +501,28 @@ def test_validate_sample_rows_catches_dedupe_field_errors(monkeypatch) -> None:
     assert "dedupe field 'messages.content' was not found" in errors[0]
 
 
+def test_collect_row_samples_returns_rows_and_scan_counts(monkeypatch) -> None:
+    def fake_stream_rows(dataset_id, config, split, seed, buffer_size):
+        yield "skip"
+        yield {"id": "one", "messages": [{"role": "user", "content": "hi"}]}
+        yield {"id": "two", "messages": [{"role": "user", "content": "there"}]}
+
+    monkeypatch.setattr(mix, "stream_rows", fake_stream_rows)
+
+    samples = collect_row_samples(
+        {
+            "id": "sample",
+            "sources": [{"name": "alpha", "dataset_id": "org/alpha", "split": "train", "count": 2}],
+        },
+        2,
+    )
+
+    assert len(samples) == 1
+    assert samples[0].source.name == "alpha"
+    assert [row["id"] for row in samples[0].rows] == ["one", "two"]
+    assert samples[0].scanned == 3
+
+
 def test_add_source_to_config_appends_sources(tmp_path) -> None:
     config_path = tmp_path / "mix.yaml"
     config_path.write_text("id: sample\nsources: []\n", encoding="utf-8")
@@ -485,6 +541,24 @@ def test_add_source_to_config_appends_sources(tmp_path) -> None:
     sources = normalize_sources(validate_config_file(config_path))
     assert [(item.name, item.dataset_id, item.config, item.count) for item in sources] == [
         ("alpha", "org/alpha", "default", 5)
+    ]
+
+
+def test_add_source_replaces_starter_placeholder_by_default(tmp_path) -> None:
+    config_path = tmp_path / "mix.yaml"
+    write_config_template(config_path)
+
+    add_source_to_config(
+        config_path,
+        name="alpha",
+        dataset_id="org/alpha",
+        split="train",
+        count=5,
+    )
+
+    sources = normalize_sources(validate_config_file(config_path))
+    assert [(item.name, item.dataset_id, item.count) for item in sources] == [
+        ("alpha", "org/alpha", 5)
     ]
 
 

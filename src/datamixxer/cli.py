@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import sys
 from typing import Any
 
 from datamixxer.mix import (
@@ -9,6 +10,7 @@ from datamixxer.mix import (
     add_source_to_config,
     build_mix,
     check_source_access,
+    collect_row_samples,
     explain_hash,
     hub_check_for_config,
     inspect_dataset,
@@ -19,6 +21,7 @@ from datamixxer.mix import (
     resolve_mix_artifact,
     validate_config_file,
     validate_sample_rows,
+    write_new_config,
     write_config_template,
 )
 
@@ -29,9 +32,8 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="Build deterministic, balanced mixes from Hugging Face dataset splits.",
         epilog="""Typical workflow:
-  datamixxer init mix.yaml
-  datamixxer validate mix.yaml
-  datamixxer check mix.yaml
+  datamixxer new mix.yaml --dataset owner/dataset --split train --count 1000
+  datamixxer doctor mix.yaml --sample-rows 3
   datamixxer plan mix.yaml
   datamixxer build mix.yaml
   datamixxer publish mix.yaml --repo-id owner/dataset-name
@@ -45,7 +47,26 @@ def main() -> None:
         description="Write a starter YAML config that uses the recommended `sources` shape.",
     )
     init.add_argument("config", help="Path for the new config file")
+    init.add_argument("--empty", action="store_true", help="write an empty config without placeholder sources")
     init.add_argument("--force", action="store_true", help="overwrite an existing config file")
+
+    new = subparsers.add_parser(
+        "new",
+        help="Create a ready-to-edit config for one dataset source",
+        description="Create a valid config with one source, so a first mix can be planned or built immediately.",
+    )
+    new.add_argument("config", help="Path for the new config file")
+    new.add_argument("--dataset", required=True, help="Hugging Face dataset id")
+    new.add_argument("--dataset-config", default=None, help="dataset config/subset")
+    new.add_argument("--split", default="train", help="source split")
+    new.add_argument("--count", type=int, default=1000, help="rows to sample from the source")
+    new.add_argument("--source-name", default=None, help="bucket name; defaults from the dataset id")
+    new.add_argument("--id", dest="mix_id", default=None, help="artifact id; defaults from the config filename")
+    new.add_argument("--name", default=None, help="human-readable mix name")
+    new.add_argument("--test-size", default="0.1", help="test split fraction, percentage, row count, or false")
+    new.add_argument("--repo-id", default=None, help="Hub dataset repo to publish to later")
+    new.add_argument("--owner", default=None, help="Hub owner; repo name defaults from id and version")
+    new.add_argument("--force", action="store_true", help="overwrite an existing config file")
 
     validate = subparsers.add_parser(
         "validate",
@@ -88,6 +109,17 @@ def main() -> None:
         help="stream this many rows per source to validate row-dependent settings such as dedupe fields",
     )
 
+    doctor = subparsers.add_parser(
+        "doctor",
+        help="Run config, source, sample, and optional Hub checks",
+        description="Validate config shape, verify source access, sample rows when requested, and optionally check Hub access.",
+    )
+    doctor.add_argument("config", help="YAML mix config")
+    doctor.add_argument("--sample-rows", type=int, default=0, help="stream this many rows per source")
+    doctor.add_argument("--push-to-hub", action="store_true", help="also require and check Hub publishing settings")
+    doctor.add_argument("--repo-id", default=None, help="override output.hub repo for the Hub check")
+    doctor.add_argument("--private", action="store_true", help="check private repo access")
+
     build = subparsers.add_parser(
         "build",
         help="Build a balanced Hugging Face dataset mix",
@@ -116,6 +148,20 @@ Use --force to rebuild anyway.""",
         action="store_true",
         help="print the normalized sampling inputs that determine the mix hash",
     )
+    plan.add_argument(
+        "--sample-rows",
+        type=int,
+        default=0,
+        help="also stream this many example rows per source",
+    )
+
+    sample = subparsers.add_parser(
+        "sample",
+        help="Preview row keys and examples from each source",
+        description="Stream a few rows from each source to verify schemas before building the full mix.",
+    )
+    sample.add_argument("config", help="YAML mix config")
+    sample.add_argument("--rows", type=int, default=3, help="rows to sample per source")
 
     list_parser = subparsers.add_parser("list", help="List local dataset mixes")
     list_parser.add_argument("--store-dir", default=None, help="mix store directory")
@@ -124,19 +170,8 @@ Use --force to rebuild anyway.""",
     show.add_argument("mix", help="mix hash prefix, artifact id, artifact path, manifest path, or config YAML")
     show.add_argument("--store-dir", default=None, help="mix store directory")
 
-    push = subparsers.add_parser("push", help="Push a local dataset mix to Hugging Face Hub")
-    add_publish_arguments(push)
-
     publish = subparsers.add_parser("publish", help="Publish a built dataset mix to Hugging Face Hub")
     add_publish_arguments(publish)
-
-    hub_check = subparsers.add_parser(
-        "hub-check",
-        help="Check Hugging Face auth and target repo access without creating repos",
-    )
-    hub_check.add_argument("config", help="YAML mix config")
-    hub_check.add_argument("--repo-id", default=None, help="override output.hub repo")
-    hub_check.add_argument("--private", action="store_true", help="check private repo access")
 
     inspect = subparsers.add_parser("inspect", help="Show available configs and splits for a Hugging Face dataset")
     inspect.add_argument("dataset_id", help="Hugging Face dataset id")
@@ -156,16 +191,45 @@ Use --force to rebuild anyway.""",
         metavar="KEY=VALUE",
         help="metadata field copied into output rows; repeat for multiple fields",
     )
+    add_source.add_argument(
+        "--append",
+        action="store_true",
+        help="append even when the config still contains the starter placeholder source",
+    )
 
-    args = parser.parse_args()
+    args = parser.parse_args(_compat_args(sys.argv[1:]))
     try:
         if args.command == "init":
-            path = write_config_template(args.config, overwrite=args.force)
+            path = write_config_template(args.config, overwrite=args.force, empty=args.empty)
             print(f"Wrote starter config to {path}")
             print("Next:")
-            print(f"  datamixxer validate {path}")
-            print(f"  datamixxer check {path}")
+            if args.empty:
+                print(
+                    "  datamixxer add-source "
+                    f"{path} --name source --dataset owner/dataset --split train --count 1000"
+                )
+            print(f"  datamixxer doctor {path}")
             print(f"  datamixxer plan {path}")
+        elif args.command == "new":
+            path = write_new_config(
+                args.config,
+                dataset_id=args.dataset,
+                dataset_config=args.dataset_config,
+                split=args.split,
+                count=args.count,
+                source_name=args.source_name,
+                mix_id=args.mix_id,
+                name=args.name,
+                test_size=parse_test_size(args.test_size),
+                repo_id=args.repo_id,
+                owner=args.owner,
+                overwrite=args.force,
+            )
+            print(f"Wrote mix config to {path}")
+            print("Next:")
+            print(f"  datamixxer doctor {path}")
+            print(f"  datamixxer plan {path}")
+            print(f"  datamixxer build {path}")
         elif args.command == "validate":
             config = validate_config_file(args.config, require_hub=args.push_to_hub)
             if args.check_sources:
@@ -183,6 +247,8 @@ Use --force to rebuild anyway.""",
                 raise_if_issues("Sample row validation failed", validate_sample_rows(config, args.sample_rows))
                 print(f"Sample row validation OK ({args.sample_rows} rows per source).")
             print(f"Config is valid: {args.config}")
+        elif args.command == "doctor":
+            print_doctor(args)
         elif args.command == "build":
             build_mix(args.config, push=args.push_to_hub, force=args.force)
         elif args.command == "plan":
@@ -191,11 +257,16 @@ Use --force to rebuild anyway.""",
             if args.explain_hash:
                 print("\nhash inputs:")
                 print(explain_hash(mix_plan.config))
+            if args.sample_rows:
+                print_row_samples(collect_row_samples(mix_plan.config, args.sample_rows))
+        elif args.command == "sample":
+            config = validate_config_file(args.config)
+            print_row_samples(collect_row_samples(config, args.rows))
         elif args.command == "list":
             print_mix_list(list_mix_artifacts(args.store_dir))
         elif args.command == "show":
             print_show(args.mix, args.store_dir)
-        elif args.command in ("push", "publish"):
+        elif args.command == "publish":
             if args.check:
                 check = hub_check_for_config(
                     args.mix,
@@ -206,13 +277,6 @@ Use --force to rebuild anyway.""",
                 return
             artifact = publish_mix_reference(args)
             print(f"Uploaded dataset to {artifact.manifest['hub']['url']}")
-        elif args.command == "hub-check":
-            check = hub_check_for_config(
-                args.config,
-                repo_id=args.repo_id,
-                private=args.private,
-            )
-            print_hub_check(check)
         elif args.command == "inspect":
             print_dataset_inspection(inspect_dataset(args.dataset_id, args.config))
         elif args.command == "add-source":
@@ -224,9 +288,10 @@ Use --force to rebuild anyway.""",
                 split=args.split,
                 count=args.count,
                 metadata=parse_metadata(args.metadata),
+                replace_placeholder=not args.append,
             )
             print(f"Added source {source['name']} to {args.config}")
-            print(f"Next: datamixxer check {args.config}")
+            print(f"Next: datamixxer doctor {args.config}")
         else:
             parser.error(f"unknown command: {args.command}")
     except (FileExistsError, FileNotFoundError, KeyError, RuntimeError, ValueError) as exc:
@@ -240,6 +305,18 @@ def add_publish_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--private", action="store_true", default=None, help="create or update a private repo")
     parser.add_argument("--commit-message", default=None, help="Hub commit message")
     parser.add_argument("--check", action="store_true", help="check Hub auth/repo access without uploading")
+
+
+def _compat_args(argv: list[str]) -> list[str]:
+    if not argv:
+        return argv
+    if argv[0] == "push":
+        return ["publish", *argv[1:]]
+    if argv[0] == "hub-check":
+        if len(argv) == 1 or argv[1] in {"-h", "--help"}:
+            return ["publish", "--help"]
+        return ["publish", argv[1], "--check", *argv[2:]]
+    return argv
 
 
 def raise_if_issues(title: str, issues: list[str]) -> None:
@@ -387,6 +464,41 @@ def print_hub_check(check: Any) -> None:
     print(f"URL: {check.url}")
 
 
+def print_doctor(args: argparse.Namespace) -> None:
+    config = validate_config_file(args.config, require_hub=args.push_to_hub and not args.repo_id)
+    print(f"Config OK: {args.config}")
+
+    raise_if_issues("Source access check failed", check_source_access(config))
+    print("Source access OK.")
+
+    if args.sample_rows:
+        raise_if_issues("Sample row validation failed", validate_sample_rows(config, args.sample_rows))
+        print(f"Sample rows OK ({args.sample_rows} rows per source).")
+
+    if args.push_to_hub:
+        check = hub_check_for_config(
+            args.config,
+            repo_id=args.repo_id,
+            private=bool(args.private),
+        )
+        print_hub_check(check)
+
+    print("Ready:")
+    print(f"  datamixxer plan {args.config}")
+    print(f"  datamixxer build {args.config}")
+
+
+def print_row_samples(samples: list[Any]) -> None:
+    print("\nsamples:")
+    for sample in samples:
+        source = sample.source
+        keys = sorted({key for row in sample.rows for key in row})
+        print(f"{source.name}: {len(sample.rows)} rows sampled, scanned {sample.scanned}")
+        print(f"  keys: {', '.join(keys)}")
+        for index, row in enumerate(sample.rows, start=1):
+            print(f"  row {index}: {_json_preview(row)}")
+
+
 def print_dataset_inspection(inspection: Any) -> None:
     print(f"Dataset: {inspection.dataset_id}")
     if inspection.configs:
@@ -411,6 +523,26 @@ def parse_metadata(values: list[str]) -> dict[str, str] | None:
             raise ValueError(f"metadata key cannot be empty: {value!r}")
         metadata[key] = item
     return metadata or None
+
+
+def parse_test_size(value: str) -> Any:
+    normalized = value.strip()
+    if normalized.lower() in {"false", "none", "no", "off", "0"}:
+        return False
+    return normalized
+
+
+def _json_preview(value: Any, limit: int = 500) -> str:
+    rendered = json_dumps(value)
+    if len(rendered) <= limit:
+        return rendered
+    return rendered[: limit - 3] + "..."
+
+
+def json_dumps(value: Any) -> str:
+    import json
+
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
 def _looks_like_yaml(path: str) -> bool:

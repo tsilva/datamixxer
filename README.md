@@ -18,13 +18,12 @@ and test keep the same blend.
 uv sync
 ```
 
-Start a config, replace the placeholder source fields, check that the Hugging
-Face source exists, preview the rows, then build:
+Create a config for a first source, run the combined preflight check, preview
+the mix, then build:
 
 ```bash
-uv run datamixxer init my_mix.yaml
-uv run datamixxer validate my_mix.yaml
-uv run datamixxer check my_mix.yaml
+uv run datamixxer new my_mix.yaml --dataset HuggingFaceTB/smoltalk2 --dataset-config SFT --split train --count 1000
+uv run datamixxer doctor my_mix.yaml --sample-rows 3
 uv run datamixxer plan my_mix.yaml
 uv run datamixxer build my_mix.yaml
 uv run datamixxer publish my_mix.yaml --repo-id owner/my-balanced-mix-v1
@@ -67,8 +66,7 @@ output:
   train_file: train.jsonl
   test_file: test.jsonl
   push_to_hub: false
-  hub:
-    repo_id: owner/my_balanced_mix-v1
+  hub: {}
 ```
 
 Required fields:
@@ -116,27 +114,31 @@ plan:
 
 ```bash
 uv run datamixxer init my_mix.yaml                                         # write starter config
+uv run datamixxer init my_mix.yaml --empty                                 # write a config without placeholder sources
+uv run datamixxer new my_mix.yaml --dataset org/data --split train         # write a valid one-source config
 uv run datamixxer inspect HuggingFaceTB/smoltalk2                          # list dataset configs and splits
 uv run datamixxer add-source my_mix.yaml --name math --dataset org/math --split train --count 1000
+uv run datamixxer doctor my_mix.yaml --sample-rows 5                       # validate shape, source access, and sample rows
 uv run datamixxer validate my_mix.yaml                                     # validate config shape
 uv run datamixxer check my_mix.yaml                                        # validate config and source access
 uv run datamixxer validate my_mix.yaml --sample-rows 5                     # catch row-schema issues such as bad dedupe fields
-uv run datamixxer plan my_mix.yaml                                         # preview rows
-uv run datamixxer plan my_mix.yaml --explain-hash                          # preview rows and hash inputs
+uv run datamixxer plan my_mix.yaml                                         # preview composition, hash, and output path
+uv run datamixxer plan my_mix.yaml --sample-rows 3                         # preview composition and row examples
+uv run datamixxer sample my_mix.yaml --rows 3                              # preview row schemas and examples
+uv run datamixxer plan my_mix.yaml --explain-hash                          # preview composition and hash inputs
 uv run datamixxer build my_mix.yaml                                        # build locally
 uv run datamixxer build my_mix.yaml --push-to-hub                          # build and upload
 uv run datamixxer list                                                     # list local mixes
 uv run datamixxer show my_mix.yaml                                         # inspect the built mix or preview the config
 uv run datamixxer publish my_mix.yaml --repo-id owner/name                 # upload a built mix
 uv run datamixxer publish my_mix.yaml --repo-id owner/name --check         # check Hub auth/repo access
-uv run datamixxer push <mix-hash-or-artifact-id> --repo-id owner/name      # upload by artifact reference
 uv sync --extra dev                                                        # install test/lint tools
 uv run pytest                                                              # run tests
 uv run ruff check .                                                        # run lint checks
 ```
 
-`push` and `hub-check` are kept as compatibility aliases. Prefer `publish` for
-new workflows.
+`push` and `hub-check` are kept as hidden compatibility aliases. Prefer
+`publish` and `publish --check` for new workflows.
 
 ## Notes
 
@@ -147,27 +149,28 @@ new workflows.
   the same hash already exists, `build` reuses it unless `--force` is passed.
   Use `plan --explain-hash` to inspect the normalized hash inputs.
 - Local mixes are stored under `.datamixxer/mixes/<mix_hash>` by default.
-  `output.store_dir` controls where `build` writes artifacts and where `list`,
-  `show`, and `push` look for them.
+  `output.store_dir` controls where `build` writes artifacts and where `list`
+  and `show` look for them.
 - Each output row keeps the source row fields and adds `bucket`,
   `source_dataset`, `source_config`, `source_split`, `output_split`, and any
   per-source `metadata`.
 - Hub uploads require `HF_TOKEN` or `huggingface-cli login` before using
-  `--push-to-hub`, `datamixxer publish`, or `datamixxer push`. Use
+  `--push-to-hub` or `datamixxer publish`. Use `doctor --push-to-hub` or
   `publish --check` before a long build to verify authentication and target repo
   access. The check is non-mutating; upload commands create the target repo when
   needed.
 - `validate` catches shape errors and unedited starter placeholders. `check`
   also verifies that every configured Hugging Face dataset/config/split can be
   reached before starting a streaming build.
-- `plan` prints a copy-friendly `Short hash`; add `--explain-hash` to print the
-  full hash and normalized hash inputs.
+- `plan` prints a copy-friendly `Short hash`; add `--sample-rows` for row
+  examples or `--explain-hash` to print the full hash and normalized hash inputs.
 
 ## Common Errors
 
 - `Config has setup items to fix`: replace starter placeholders such as
   `owner/dataset-name`, remove `config: default` when the dataset has no config,
-  and set a real Hub repo before publishing.
+  and set a real Hub repo before publishing. To avoid placeholders entirely, use
+  `datamixxer new ...` or `datamixxer init --empty`.
 - `count must be greater than 0`: every source must request at least one row.
 - `dedupe field ... was not found`: run `validate --sample-rows 5` to catch row
   schema mismatches before a full build, then change `dedupe.field` or disable

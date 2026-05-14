@@ -19,6 +19,8 @@ from datamixxer.standards import (
 DEFAULT_STORE_DIR = ".datamixxer/mixes"
 Progress = Callable[[str], None]
 MISSING = object()
+PLACEHOLDER_DATASET_IDS = {"owner/dataset-name"}
+PLACEHOLDER_REPO_IDS = {"owner/my_balanced_mix-v1"}
 CONFIG_TEMPLATE = """# Stable id for the generated artifact and default repo naming.
 id: my_balanced_mix
 name: My Balanced Mix
@@ -50,6 +52,28 @@ output:
   push_to_hub: false
   hub:
     repo_id: owner/my_balanced_mix-v1
+"""
+EMPTY_CONFIG_TEMPLATE = """# Stable id for the generated artifact and default repo naming.
+id: my_balanced_mix
+name: My Balanced Mix
+version: v1
+
+seed: 3407
+buffer_size: 10000
+dedupe: true
+
+# Optional. Set to false or remove this block for train-only output.
+split:
+  test_size: 0.1
+
+sources: []
+
+output:
+  store_dir: .datamixxer/mixes
+  train_file: train.jsonl
+  test_file: test.jsonl
+  push_to_hub: false
+  hub: {}
 """
 
 
@@ -88,6 +112,13 @@ class DatasetInspection:
     splits_by_config: dict[str | None, list[str]]
 
 
+@dataclass(frozen=True)
+class RowSample:
+    source: MixSource
+    rows: list[dict[str, Any]]
+    scanned: int
+
+
 def stream_rows(dataset_id: str, config: str | None, split: str, seed: int, buffer_size: int):
     from datasets import load_dataset
 
@@ -96,12 +127,65 @@ def stream_rows(dataset_id: str, config: str | None, split: str, seed: int, buff
     yield from shuffled
 
 
-def write_config_template(path: str | Path, *, overwrite: bool = False) -> Path:
+def write_config_template(path: str | Path, *, overwrite: bool = False, empty: bool = False) -> Path:
     output = Path(path)
     if output.exists() and not overwrite:
         raise FileExistsError(f"{output} already exists; pass --force to overwrite it")
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(CONFIG_TEMPLATE, encoding="utf-8")
+    output.write_text(EMPTY_CONFIG_TEMPLATE if empty else CONFIG_TEMPLATE, encoding="utf-8")
+    return output
+
+
+def write_new_config(
+    path: str | Path,
+    *,
+    dataset_id: str,
+    split: str,
+    count: int,
+    source_name: str | None = None,
+    dataset_config: str | None = None,
+    mix_id: str | None = None,
+    name: str | None = None,
+    test_size: Any = 0.1,
+    repo_id: str | None = None,
+    owner: str | None = None,
+    overwrite: bool = False,
+) -> Path:
+    output = Path(path)
+    if output.exists() and not overwrite:
+        raise FileExistsError(f"{output} already exists; pass --force to overwrite it")
+    artifact_id = mix_id or output.stem.replace("-", "_")
+    config: dict[str, Any] = {
+        "id": artifact_id,
+        "name": name or _title_from_id(artifact_id),
+        "version": "v1",
+        "seed": 3407,
+        "buffer_size": 10000,
+        "dedupe": True,
+        "split": {"test_size": test_size},
+        "sources": [
+            {
+                "name": source_name or _source_name_from_dataset(dataset_id),
+                "dataset_id": dataset_id,
+                "split": split,
+                "count": count,
+            }
+        ],
+        "output": {
+            "store_dir": DEFAULT_STORE_DIR,
+            "train_file": "train.jsonl",
+            "test_file": "test.jsonl",
+            "push_to_hub": False,
+            "hub": {},
+        },
+    }
+    if dataset_config:
+        config["sources"][0]["config"] = dataset_config
+    if repo_id:
+        config["output"]["hub"]["repo_id"] = repo_id
+    elif owner:
+        config["output"]["hub"]["owner"] = owner
+    write_yaml(output, config)
     return output
 
 
@@ -152,14 +236,13 @@ def config_warnings(config: dict[str, Any]) -> list[str]:
     except ValueError:
         return warnings
 
-    placeholder_dataset_ids = {"owner/dataset-name"}
     for source in sources:
-        if source.dataset_id in placeholder_dataset_ids:
+        if source.dataset_id in PLACEHOLDER_DATASET_IDS:
             warnings.append(
                 f"{_source_path(source)}.dataset_id: replace placeholder dataset_id {source.dataset_id!r} "
                 "with a real Hugging Face dataset id"
             )
-        if source.dataset_id in placeholder_dataset_ids and source.config == "default":
+        if source.dataset_id in PLACEHOLDER_DATASET_IDS and source.config == "default":
             warnings.append(
                 f"{_source_path(source)}.config: remove 'default' if the dataset "
                 "has no config or replace it with a real config name"
@@ -168,7 +251,7 @@ def config_warnings(config: dict[str, Any]) -> list[str]:
     output = config.get("output") or {}
     hub = output.get("hub") or {}
     repo_id = hub.get("repo_id")
-    if repo_id == "owner/my_balanced_mix-v1":
+    if repo_id in PLACEHOLDER_REPO_IDS:
         warnings.append(
             f"output.hub.repo_id: replace placeholder {repo_id!r} before publishing"
         )
@@ -236,6 +319,39 @@ def validate_sample_rows(config: dict[str, Any], sample_rows: int) -> list[str]:
     return errors
 
 
+def collect_row_samples(config: dict[str, Any], sample_rows: int) -> list[RowSample]:
+    """Read a small row sample from each source for schema and content previews."""
+    if sample_rows <= 0:
+        raise ValueError("sample_rows must be greater than 0")
+    validate_config(config)
+    seed = int(config.get("seed", 3407))
+    buffer_size = int(config.get("buffer_size", 10_000))
+    dedupe_config = config.get("dedupe", True)
+    samples: list[RowSample] = []
+    for source in normalize_sources(config):
+        iterator = stream_rows(
+            source.dataset_id,
+            source.config,
+            source.split,
+            seed + source.index,
+            buffer_size,
+        )
+        rows: list[dict[str, Any]] = []
+        scanned = 0
+        for row in iterator:
+            scanned += 1
+            if not isinstance(row, dict):
+                continue
+            dedupe_key(row, dedupe_config)
+            rows.append(row)
+            if len(rows) >= sample_rows:
+                break
+        if not rows:
+            raise RuntimeError(f"{source.name}: no dictionary rows found in sampled source rows")
+        samples.append(RowSample(source=source, rows=rows, scanned=scanned))
+    return samples
+
+
 def inspect_dataset(dataset_id: str, config: str | None = None) -> DatasetInspection:
     from datasets import get_dataset_config_names, get_dataset_split_names
 
@@ -271,6 +387,7 @@ def add_source_to_config(
     count: int,
     config: str | None = None,
     metadata: dict[str, Any] | None = None,
+    replace_placeholder: bool = True,
 ) -> dict[str, Any]:
     if not Path(config_path).exists():
         raise FileNotFoundError(f"{config_path} does not exist. Run `datamixxer init {config_path}` first.")
@@ -288,7 +405,12 @@ def add_source_to_config(
         source["config"] = config
     if metadata:
         source["metadata"] = metadata
-    sources.append(source)
+    placeholder_index = _placeholder_source_index(sources) if replace_placeholder else None
+    if placeholder_index is None:
+        sources.append(source)
+    else:
+        sources[placeholder_index] = source
+        _clear_placeholder_hub_repo(mix_config)
     write_yaml(config_path, mix_config)
     return source
 
@@ -888,6 +1010,7 @@ def build_mix(config_path: str | Path, *, push: bool | None = None, force: bool 
             commit_message=hub.get("commit_message", "Upload datamixxer dataset"),
         )
         print(f"Uploaded dataset to {artifact.manifest['hub']['url']}")
+    print_build_summary(artifact)
     return artifact
 
 
@@ -921,6 +1044,57 @@ def _source_label(source: MixSource) -> str:
 def _source_path(source: MixSource) -> str:
     key = "sources" if "dataset_id" in source.raw else "plan"
     return f"{key}[{source.index}]"
+
+
+def print_build_summary(artifact: MixArtifact) -> None:
+    manifest = artifact.manifest
+    print("\nOutputs:")
+    print(f"  artifact: {artifact.path}")
+    print(f"  manifest: {artifact.path / 'manifest.json'}")
+    print(f"  dataset card: {artifact.path / 'README.md'}")
+    for split, info in (manifest.get("splits") or {}).items():
+        print(f"  {split}: {artifact.path / str(info.get('file'))} ({info.get('rows')} rows)")
+    print("Next:")
+    print(f"  datamixxer show {str(manifest.get('mix_hash', ''))[:12]}")
+    hub = manifest.get("hub") or {}
+    repo_id = hub.get("repo_id") or manifest.get("hub_repo_id")
+    if repo_id and not hub.get("pushed"):
+        print(f"  datamixxer publish {manifest.get('config_path') or manifest.get('mix_hash')} --repo-id {repo_id}")
+
+
+def _placeholder_source_index(sources: list[Any]) -> int | None:
+    for index, source in enumerate(sources):
+        if not isinstance(source, dict):
+            continue
+        if source.get("dataset_id") in PLACEHOLDER_DATASET_IDS:
+            return index
+    return None
+
+
+def _clear_placeholder_hub_repo(config: dict[str, Any]) -> None:
+    output = config.get("output")
+    if not isinstance(output, dict):
+        return
+    hub = output.get("hub")
+    if not isinstance(hub, dict):
+        return
+    if hub.get("repo_id") in PLACEHOLDER_REPO_IDS:
+        hub.pop("repo_id")
+
+
+def _title_from_id(value: str) -> str:
+    return str(value).replace("_", " ").replace("-", " ").title()
+
+
+def _source_name_from_dataset(dataset_id: str) -> str:
+    return slug_candidate(dataset_id.rsplit("/", 1)[-1])
+
+
+def slug_candidate(value: str) -> str:
+    candidate = str(value).strip().lower().replace("-", "_")
+    candidate = "".join(char if char.isalnum() or char == "_" else "_" for char in candidate)
+    candidate = "_".join(part for part in candidate.split("_") if part)
+    return candidate or "source"
 
 
 def _present(value: Any) -> bool:
