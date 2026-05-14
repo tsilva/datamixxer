@@ -7,6 +7,7 @@ import datamixxer.mix as mix
 import pytest
 from datamixxer.cli import print_mix_plan
 from datamixxer.mix import (
+    add_source_to_config,
     build_mix,
     check_source_access,
     dedupe_key,
@@ -20,7 +21,9 @@ from datamixxer.mix import (
     push_mix,
     resolve_mix_artifact,
     split_test_count,
+    validate_config,
     validate_config_file,
+    validate_sample_rows,
     write_config_template,
 )
 
@@ -30,6 +33,34 @@ def test_split_test_count_supports_fraction_percent_and_count() -> None:
     assert split_test_count(100, "10%") == 10
     assert split_test_count(100, "0.1") == 10
     assert split_test_count(100, 7) == 7
+
+
+def test_validate_config_rejects_zero_row_sources() -> None:
+    with pytest.raises(ValueError, match="sources\\[0\\].count must be greater than 0"):
+        validate_config(
+            {
+                "id": "sample",
+                "sources": [
+                    {"name": "alpha", "dataset_id": "org/alpha", "split": "train", "count": 0}
+                ],
+            }
+        )
+
+    with pytest.raises(ValueError, match="must request at least one row"):
+        validate_config(
+            {
+                "id": "sample",
+                "sources": [
+                    {
+                        "name": "alpha",
+                        "dataset_id": "org/alpha",
+                        "split": "train",
+                        "train_count": 0,
+                        "test_count": 0,
+                    }
+                ],
+            }
+        )
 
 
 def test_normalize_sources_supports_llmstyler_plan_shape() -> None:
@@ -106,7 +137,7 @@ def test_validate_config_rejects_unedited_starter_placeholders(tmp_path) -> None
     config_path = tmp_path / "mix.yaml"
     write_config_template(config_path)
 
-    with pytest.raises(ValueError, match="placeholder dataset_id"):
+    with pytest.raises(ValueError, match="Config has 3 setup items to fix"):
         validate_config_file(config_path)
 
 
@@ -409,12 +440,52 @@ def test_print_mix_plan_includes_short_hash_and_next_steps(tmp_path, capsys) -> 
     )
     planned = plan_mix(config_path)
 
-    print_mix_plan(planned)
+    print_mix_plan(planned, config_path=str(config_path))
 
     output = capsys.readouterr().out
-    assert f"short_hash: {planned.hash_value[:12]}" in output
+    assert f"Short hash: {planned.hash_value[:12]}" in output
     assert "next:" in output
-    assert f"datamixxer show {planned.hash_value[:12]}" in output
+    assert f"datamixxer build {config_path}" in output
+
+
+def test_validate_sample_rows_catches_dedupe_field_errors(monkeypatch) -> None:
+    def fake_stream_rows(dataset_id, config, split, seed, buffer_size):
+        yield {"text": "hello"}
+
+    monkeypatch.setattr(mix, "stream_rows", fake_stream_rows)
+
+    errors = validate_sample_rows(
+        {
+            "id": "sample",
+            "dedupe": {"field": "messages.content"},
+            "sources": [{"name": "alpha", "dataset_id": "org/alpha", "split": "train", "count": 1}],
+        },
+        1,
+    )
+
+    assert "alpha: sampled row validation failed" in errors[0]
+    assert "dedupe field 'messages.content' was not found" in errors[0]
+
+
+def test_add_source_to_config_appends_sources(tmp_path) -> None:
+    config_path = tmp_path / "mix.yaml"
+    config_path.write_text("id: sample\nsources: []\n", encoding="utf-8")
+
+    source = add_source_to_config(
+        config_path,
+        name="alpha",
+        dataset_id="org/alpha",
+        config="default",
+        split="train",
+        count=5,
+        metadata={"domain": "math"},
+    )
+
+    assert source["name"] == "alpha"
+    sources = normalize_sources(validate_config_file(config_path))
+    assert [(item.name, item.dataset_id, item.config, item.count) for item in sources] == [
+        ("alpha", "org/alpha", "default", 5)
+    ]
 
 
 def test_hub_check_for_config_uses_config_repo(monkeypatch, tmp_path) -> None:

@@ -8,7 +8,7 @@ from time import perf_counter
 from typing import Any, Callable
 
 from datamixxer.hub import HubCheck, check_hub_access, preflight_upload, repo_url, upload_folder
-from datamixxer.io import read_json, read_yaml, write_json, write_jsonl
+from datamixxer.io import read_json, read_yaml, write_json, write_jsonl, write_yaml
 from datamixxer.standards import (
     artifact_version,
     dataset_card,
@@ -19,19 +19,24 @@ from datamixxer.standards import (
 DEFAULT_STORE_DIR = ".datamixxer/mixes"
 Progress = Callable[[str], None]
 MISSING = object()
-CONFIG_TEMPLATE = """id: my_balanced_mix
+CONFIG_TEMPLATE = """# Stable id for the generated artifact and default repo naming.
+id: my_balanced_mix
 name: My Balanced Mix
 version: v1
+
 seed: 3407
 buffer_size: 10000
 dedupe: true
 
+# Optional. Set to false or remove this block for train-only output.
 split:
   test_size: 0.1
 
 sources:
   - name: example
+    # Replace with a real Hugging Face dataset id, for example HuggingFaceTB/smoltalk2.
     dataset_id: owner/dataset-name
+    # Remove this line if the dataset has no config/subset.
     config: default
     split: train
     count: 1000
@@ -76,6 +81,13 @@ class MixPlan:
     artifact: MixArtifact | None
 
 
+@dataclass(frozen=True)
+class DatasetInspection:
+    dataset_id: str
+    configs: list[str]
+    splits_by_config: dict[str | None, list[str]]
+
+
 def stream_rows(dataset_id: str, config: str | None, split: str, seed: int, buffer_size: int):
     from datasets import load_dataset
 
@@ -91,6 +103,10 @@ def write_config_template(path: str | Path, *, overwrite: bool = False) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(CONFIG_TEMPLATE, encoding="utf-8")
     return output
+
+
+def _format_config_issues(title: str, issues: list[str]) -> str:
+    return title + ":\n" + "\n".join(f"- {issue}" for issue in issues)
 
 
 def validate_config(config: dict[str, Any], *, require_hub: bool = False) -> None:
@@ -126,7 +142,7 @@ def validate_config(config: dict[str, Any], *, require_hub: bool = False) -> Non
     normalize_sources(config)
     warnings = config_warnings(config)
     if warnings:
-        raise ValueError("; ".join(warnings))
+        raise ValueError(_format_config_issues(f"Config has {len(warnings)} setup items to fix", warnings))
 
 
 def config_warnings(config: dict[str, Any]) -> list[str]:
@@ -140,12 +156,12 @@ def config_warnings(config: dict[str, Any]) -> list[str]:
     for source in sources:
         if source.dataset_id in placeholder_dataset_ids:
             warnings.append(
-                f"{source.name} uses placeholder dataset_id {source.dataset_id!r}; "
-                "replace it with a real Hugging Face dataset id"
+                f"{_source_path(source)}.dataset_id: replace placeholder dataset_id {source.dataset_id!r} "
+                "with a real Hugging Face dataset id"
             )
         if source.dataset_id in placeholder_dataset_ids and source.config == "default":
             warnings.append(
-                f"{source.name} uses placeholder config 'default'; remove it if the dataset "
+                f"{_source_path(source)}.config: remove 'default' if the dataset "
                 "has no config or replace it with a real config name"
             )
 
@@ -154,8 +170,7 @@ def config_warnings(config: dict[str, Any]) -> list[str]:
     repo_id = hub.get("repo_id")
     if repo_id == "owner/my_balanced_mix-v1":
         warnings.append(
-            f"output.hub.repo_id {repo_id!r} looks like a placeholder; "
-            "replace it before publishing"
+            f"output.hub.repo_id: replace placeholder {repo_id!r} before publishing"
         )
     return warnings
 
@@ -187,6 +202,95 @@ def check_source_access(config: dict[str, Any]) -> list[str]:
                 f"available splits: {', '.join(splits) or 'none'}"
             )
     return errors
+
+
+def validate_sample_rows(config: dict[str, Any], sample_rows: int) -> list[str]:
+    """Read a small row sample to catch row-schema-dependent config problems."""
+    if sample_rows <= 0:
+        return []
+    errors: list[str] = []
+    seed = int(config.get("seed", 3407))
+    buffer_size = int(config.get("buffer_size", 10_000))
+    dedupe_config = config.get("dedupe", True)
+    for source in normalize_sources(config):
+        try:
+            iterator = stream_rows(
+                source.dataset_id,
+                source.config,
+                source.split,
+                seed + source.index,
+                buffer_size,
+            )
+            checked = 0
+            for row in iterator:
+                if not isinstance(row, dict):
+                    continue
+                dedupe_key(row, dedupe_config)
+                checked += 1
+                if checked >= sample_rows:
+                    break
+            if checked == 0:
+                errors.append(f"{source.name}: no dictionary rows found in the first sampled rows")
+        except Exception as exc:
+            errors.append(f"{source.name}: sampled row validation failed: {exc}")
+    return errors
+
+
+def inspect_dataset(dataset_id: str, config: str | None = None) -> DatasetInspection:
+    from datasets import get_dataset_config_names, get_dataset_split_names
+
+    try:
+        configs = get_dataset_config_names(dataset_id)
+    except Exception:
+        configs = []
+
+    selected_configs: list[str | None]
+    if config is not None:
+        selected_configs = [config]
+    elif configs:
+        selected_configs = configs
+    else:
+        selected_configs = [None]
+
+    splits_by_config: dict[str | None, list[str]] = {}
+    for config_name in selected_configs:
+        splits_by_config[config_name] = get_dataset_split_names(dataset_id, config_name=config_name)
+    return DatasetInspection(
+        dataset_id=dataset_id,
+        configs=[str(item) for item in configs],
+        splits_by_config=splits_by_config,
+    )
+
+
+def add_source_to_config(
+    config_path: str | Path,
+    *,
+    name: str,
+    dataset_id: str,
+    split: str,
+    count: int,
+    config: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if not Path(config_path).exists():
+        raise FileNotFoundError(f"{config_path} does not exist. Run `datamixxer init {config_path}` first.")
+    mix_config = read_yaml(config_path)
+    sources = mix_config.setdefault("sources", [])
+    if not isinstance(sources, list):
+        raise ValueError("`sources` must be a list before add-source can append to it")
+    source: dict[str, Any] = {
+        "name": name,
+        "dataset_id": dataset_id,
+        "split": split,
+        "count": count,
+    }
+    if config:
+        source["config"] = config
+    if metadata:
+        source["metadata"] = metadata
+    sources.append(source)
+    write_yaml(config_path, mix_config)
+    return source
 
 
 def mix_hash(config: dict[str, Any]) -> str:
@@ -473,13 +577,15 @@ def resolve_counts(
         test_count = _as_int(item.get("test_count", 0), f"{path}.test_count")
         if train_count < 0 or test_count < 0:
             raise ValueError(f"{path}.train_count and {path}.test_count must be non-negative")
+        if train_count + test_count <= 0:
+            raise ValueError(f"{path}.train_count and {path}.test_count must request at least one row")
         return train_count, test_count, train_count + test_count
 
     if "count" not in item:
         raise ValueError(f"{path} is missing count")
     total_count = _as_int(item["count"], f"{path}.count")
-    if total_count < 0:
-        raise ValueError(f"{path}.count must be non-negative")
+    if total_count <= 0:
+        raise ValueError(f"{path}.count must be greater than 0")
 
     test_count = split_test_count(
         total_count,
@@ -810,6 +916,11 @@ def _source_label(source: MixSource) -> str:
     if source.config:
         return f"{source.dataset_id}/{source.config}:{source.split}"
     return f"{source.dataset_id}:{source.split}"
+
+
+def _source_path(source: MixSource) -> str:
+    key = "sources" if "dataset_id" in source.raw else "plan"
+    return f"{key}[{source.index}]"
 
 
 def _present(value: Any) -> bool:

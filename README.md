@@ -5,7 +5,7 @@
 </div>
 
 `datamixxer` is a Python CLI for building balanced subsamples from Hugging Face
-datasets. It reads a YAML plan, streams each source split, shuffles
+datasets. It reads a YAML config, streams each source split, shuffles
 deterministically, deduplicates rows, and writes a versioned dataset mix.
 
 Each build produces JSONL split files, `manifest.json`, and a dataset card. When
@@ -18,15 +18,22 @@ and test keep the same blend.
 uv sync
 ```
 
-Start a config, edit the placeholder dataset and Hub fields, validate it,
-preview the plan, then build:
+Start a config, replace the placeholder source fields, check that the Hugging
+Face source exists, preview the rows, then build:
 
 ```bash
 uv run datamixxer init my_mix.yaml
-uv run datamixxer validate configs/smoltalk_style_mix.yaml
-uv run datamixxer validate configs/smoltalk_style_mix.yaml --check-sources
-uv run datamixxer plan configs/smoltalk_style_mix.yaml --explain-hash
-uv run datamixxer build configs/smoltalk_style_mix.yaml --no-push-to-hub
+uv run datamixxer validate my_mix.yaml
+uv run datamixxer check my_mix.yaml
+uv run datamixxer plan my_mix.yaml
+uv run datamixxer build my_mix.yaml
+uv run datamixxer publish my_mix.yaml --repo-id owner/my-balanced-mix-v1
+```
+
+To discover valid dataset configs and splits before editing YAML:
+
+```bash
+uv run datamixxer inspect HuggingFaceTB/smoltalk2
 ```
 
 ## Config
@@ -67,10 +74,10 @@ output:
 Required fields:
 
 - `id`: stable artifact id used in manifests and default repo naming.
-- `sources` or `plan`: non-empty list of source buckets.
-- Source `dataset_id`: Hugging Face dataset id, unless inherited from `source`.
+- `sources`: non-empty list of source buckets.
+- Source `dataset_id`: Hugging Face dataset id.
 - Source `split`: Hugging Face split name to stream.
-- Source `count`, or explicit `train_count`/`test_count`.
+- Source `count`: positive row count.
 
 Common optional fields:
 
@@ -80,17 +87,19 @@ Common optional fields:
 - `buffer_size`: streaming shuffle buffer. Defaults to `10000`.
 - `split.test_size`: fraction, percentage, or row count for each bucket's test split.
 - `dedupe`: `true`, `false`, a field path such as `messages`, or a mapping with `field`/`fields`.
-- Source `config` or `subset`: dataset config/subset name.
+- Source `config`: dataset config/subset name.
 - Source `metadata`: mapping copied into every output row for that source.
-- Source `restyle`: boolean copied into output rows for `llmstyler` compatibility.
 - `output.store_dir`: local artifact store. Defaults to `.datamixxer/mixes`.
 - `output.train_file` and `output.test_file`: output JSONL filenames.
 - `output.push_to_hub`: whether `build` should upload by default.
 - `output.hub.repo_id` or `output.hub.owner`: Hub target for publishing.
 - `output.hub.private`: create or update the target Hub repo as private.
 - `output.hub.commit_message`: Hub upload commit message.
+- Source `train_count` and `test_count`: advanced alternative to `count` plus `split.test_size`.
+- Source `restyle`: compatibility flag copied into output rows.
 
-The older shared-source shape used by `llmstyler` is also supported:
+The older shared-source shape used by `llmstyler` is still supported for
+existing configs, but new configs should use `sources`:
 
 ```yaml
 source:
@@ -106,20 +115,28 @@ plan:
 ## Commands
 
 ```bash
-uv run datamixxer init my_mix.yaml                                      # write starter config
-uv run datamixxer validate configs/smoltalk_style_mix.yaml              # validate config shape
-uv run datamixxer validate configs/smoltalk_style_mix.yaml --check-sources  # verify Hub dataset/config/split access
-uv run datamixxer plan configs/smoltalk_style_mix.yaml --explain-hash   # preview rows and hash inputs
-uv run datamixxer build configs/smoltalk_style_mix.yaml --no-push-to-hub  # build locally
-uv run datamixxer build configs/smoltalk_style_mix.yaml --push-to-hub     # build and upload
-uv run datamixxer list                                                    # list local mixes
-uv run datamixxer show <mix-hash-or-artifact-id>                          # inspect a mix
-uv run datamixxer hub-check configs/smoltalk_style_mix.yaml               # check Hub auth/repo access without creating repos
-uv run datamixxer push <mix-hash-or-artifact-id> --repo-id owner/name      # upload later
-uv sync --extra dev                                                       # install test/lint tools
-uv run pytest                                                             # run tests
-uv run ruff check .                                                       # run lint checks
+uv run datamixxer init my_mix.yaml                                         # write starter config
+uv run datamixxer inspect HuggingFaceTB/smoltalk2                          # list dataset configs and splits
+uv run datamixxer add-source my_mix.yaml --name math --dataset org/math --split train --count 1000
+uv run datamixxer validate my_mix.yaml                                     # validate config shape
+uv run datamixxer check my_mix.yaml                                        # validate config and source access
+uv run datamixxer validate my_mix.yaml --sample-rows 5                     # catch row-schema issues such as bad dedupe fields
+uv run datamixxer plan my_mix.yaml                                         # preview rows
+uv run datamixxer plan my_mix.yaml --explain-hash                          # preview rows and hash inputs
+uv run datamixxer build my_mix.yaml                                        # build locally
+uv run datamixxer build my_mix.yaml --push-to-hub                          # build and upload
+uv run datamixxer list                                                     # list local mixes
+uv run datamixxer show my_mix.yaml                                         # inspect the built mix or preview the config
+uv run datamixxer publish my_mix.yaml --repo-id owner/name                 # upload a built mix
+uv run datamixxer publish my_mix.yaml --repo-id owner/name --check         # check Hub auth/repo access
+uv run datamixxer push <mix-hash-or-artifact-id> --repo-id owner/name      # upload by artifact reference
+uv sync --extra dev                                                        # install test/lint tools
+uv run pytest                                                              # run tests
+uv run ruff check .                                                        # run lint checks
 ```
+
+`push` and `hub-check` are kept as compatibility aliases. Prefer `publish` for
+new workflows.
 
 ## Notes
 
@@ -136,14 +153,27 @@ uv run ruff check .                                                       # run 
   `source_dataset`, `source_config`, `source_split`, `output_split`, and any
   per-source `metadata`.
 - Hub uploads require `HF_TOKEN` or `huggingface-cli login` before using
-  `--push-to-hub` or `datamixxer push`. Use `hub-check` before a long build to
-  verify authentication and target repo access. `hub-check` is non-mutating; it
-  does not create missing repos. Upload commands create the target repo when
+  `--push-to-hub`, `datamixxer publish`, or `datamixxer push`. Use
+  `publish --check` before a long build to verify authentication and target repo
+  access. The check is non-mutating; upload commands create the target repo when
   needed.
-- `validate` catches unedited starter placeholders. Add `--check-sources` when
-  you want to verify that every configured Hugging Face dataset/config/split can
-  be reached before starting a streaming build.
-- `plan` prints both the full `mix_hash` and a copy-friendly `short_hash`.
+- `validate` catches shape errors and unedited starter placeholders. `check`
+  also verifies that every configured Hugging Face dataset/config/split can be
+  reached before starting a streaming build.
+- `plan` prints a copy-friendly `Short hash`; add `--explain-hash` to print the
+  full hash and normalized hash inputs.
+
+## Common Errors
+
+- `Config has setup items to fix`: replace starter placeholders such as
+  `owner/dataset-name`, remove `config: default` when the dataset has no config,
+  and set a real Hub repo before publishing.
+- `count must be greater than 0`: every source must request at least one row.
+- `dedupe field ... was not found`: run `validate --sample-rows 5` to catch row
+  schema mismatches before a full build, then change `dedupe.field` or disable
+  dedupe for that mix.
+- `No built mix exists for my_mix.yaml`: run `datamixxer build my_mix.yaml`
+  before `datamixxer publish my_mix.yaml`.
 
 ## Architecture
 

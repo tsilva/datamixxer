@@ -16,6 +16,12 @@ def read_yaml(path: str | Path) -> dict[str, Any]:
     return value
 
 
+def write_yaml(path: str | Path, value: Any) -> None:
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(yaml.safe_dump(value, sort_keys=False), encoding="utf-8")
+
+
 def write_json(path: str | Path, value: Any) -> None:
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
