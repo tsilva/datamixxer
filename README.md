@@ -154,11 +154,14 @@ uv run ruff check .                                                        # run
 - Each output row keeps the source row fields and adds `bucket`,
   `source_dataset`, `source_config`, `source_split`, `output_split`, and any
   per-source `metadata`.
-- Hub uploads require `HF_TOKEN` or `huggingface-cli login` before using
+- Hub uploads require `HF_TOKEN` or `hf auth login` before using
   `--push-to-hub` or `datamixxer publish`. Use `doctor --push-to-hub` or
   `publish --check` before a long build to verify authentication and target repo
   access. The check is non-mutating; upload commands create the target repo when
   needed.
+- Streaming commands close source iterators after collecting the requested rows
+  and suppress Hugging Face progress bars; datamixxer prints one progress stream
+  per source bucket.
 - `validate` catches shape errors and unedited starter placeholders. Add
   `--check-sources` to verify that every configured Hugging Face
   dataset/config/split can be reached before starting a streaming build.
