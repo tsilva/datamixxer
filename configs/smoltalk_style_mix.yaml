@@ -1,0 +1,56 @@
+# Equivalent to the base mix shape used in ../llmstyler, with an optional
+# balanced train/test split enabled for datamixxer.
+id: smoltalk_style_mix
+name: SmolTalk Style Mix
+version: v1
+seed: 3407
+buffer_size: 10000
+
+split:
+  test_size: 0.1
+
+source:
+  dataset_id: HuggingFaceTB/smoltalk2
+  config: SFT
+
+plan:
+  - name: capability_magpie
+    split: smoltalk_smollm3_smol_magpie_ultra_no_think
+    count: 300
+    restyle: false
+  - name: capability_rewrite
+    split: smoltalk_smollm3_smol_rewrite_no_think
+    count: 150
+    restyle: false
+  - name: capability_summarize
+    split: smoltalk_smollm3_smol_summarize_no_think
+    count: 100
+    restyle: false
+  - name: capability_instruction_following
+    split: tulu_3_sft_personas_instruction_following_no_think
+    count: 100
+    restyle: false
+  - name: capability_science
+    split: Mixture_of_Thoughts_science_no_think
+    count: 50
+    restyle: false
+  - name: restyle_magpie
+    split: smoltalk_smollm3_smol_magpie_ultra_no_think
+    count: 180
+    restyle: true
+  - name: restyle_rewrite
+    split: smoltalk_smollm3_smol_rewrite_no_think
+    count: 70
+    restyle: true
+  - name: restyle_summarize
+    split: smoltalk_smollm3_smol_summarize_no_think
+    count: 50
+    restyle: true
+
+output:
+  store_dir: .datamixxer/mixes
+  train_file: train.jsonl
+  test_file: test.jsonl
+  push_to_hub: false
+  hub:
+    repo_id: tsilva/smoltalk_style_mix-v1
