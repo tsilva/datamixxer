@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 
+import datamixxer.hub as hub
 import datamixxer.mix as mix
 import pytest
+from datamixxer.cli import print_mix_plan
 from datamixxer.mix import (
     build_mix,
+    check_source_access,
     dedupe_key,
     explain_hash,
     hub_check_for_config,
@@ -99,11 +102,29 @@ def test_write_config_template_refuses_existing_file(tmp_path) -> None:
     assert "sources:" in config_path.read_text(encoding="utf-8")
 
 
+def test_validate_config_rejects_unedited_starter_placeholders(tmp_path) -> None:
+    config_path = tmp_path / "mix.yaml"
+    write_config_template(config_path)
+
+    with pytest.raises(ValueError, match="placeholder dataset_id"):
+        validate_config_file(config_path)
+
+
 def test_dedupe_defaults_to_messages_when_present() -> None:
     row_a = {"messages": [{"role": "user", "content": "hi"}], "id": 1}
     row_b = {"messages": [{"role": "user", "content": "hi"}], "id": 2}
 
     assert dedupe_key(row_a, True) == dedupe_key(row_b, True)
+
+
+def test_dedupe_explicit_missing_field_raises_clear_error() -> None:
+    with pytest.raises(ValueError, match="dedupe field 'messages' was not found"):
+        dedupe_key({"text": "hello"}, "messages")
+
+
+def test_dedupe_mapping_missing_field_raises_clear_error() -> None:
+    with pytest.raises(ValueError, match="dedupe field 'messages.content' was not found"):
+        dedupe_key({"messages": []}, {"field": "messages.content"})
 
 
 def test_materialize_rows_adds_mix_metadata_and_item_metadata() -> None:
@@ -216,6 +237,33 @@ def test_explain_hash_shows_normalized_sampling_inputs() -> None:
     assert payload["seed"] == 1
     assert payload["sources"][0]["name"] == "alpha"
     assert payload["sources"][0]["train_count"] == 2
+
+
+def test_check_source_access_reports_missing_split(monkeypatch) -> None:
+    def fake_get_dataset_split_names(path, config_name=None):
+        assert path == "org/alpha"
+        assert config_name is None
+        return ["train", "validation"]
+
+    monkeypatch.setattr("datasets.get_dataset_split_names", fake_get_dataset_split_names)
+
+    errors = check_source_access(
+        {
+            "id": "sample",
+            "sources": [
+                {
+                    "name": "alpha",
+                    "dataset_id": "org/alpha",
+                    "split": "test",
+                    "count": 1,
+                }
+            ],
+        }
+    )
+
+    assert errors == [
+        "alpha: split 'test' was not found in org/alpha; available splits: train, validation"
+    ]
 
 
 def test_build_mix_reuses_existing_hash(monkeypatch, tmp_path) -> None:
@@ -344,6 +392,31 @@ def test_plan_mix_resolves_counts_hash_path_and_status(tmp_path) -> None:
     ]
 
 
+def test_print_mix_plan_includes_short_hash_and_next_steps(tmp_path, capsys) -> None:
+    config_path = tmp_path / "mix.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "id: sample",
+                "sources:",
+                "  - name: alpha",
+                "    dataset_id: org/alpha",
+                "    split: train",
+                "    count: 1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    planned = plan_mix(config_path)
+
+    print_mix_plan(planned)
+
+    output = capsys.readouterr().out
+    assert f"short_hash: {planned.hash_value[:12]}" in output
+    assert "next:" in output
+    assert f"datamixxer show {planned.hash_value[:12]}" in output
+
+
 def test_hub_check_for_config_uses_config_repo(monkeypatch, tmp_path) -> None:
     def fake_check_hub_access(*, repo_id, repo_type, private):
         return mix.HubCheck(
@@ -378,6 +451,57 @@ def test_hub_check_for_config_uses_config_repo(monkeypatch, tmp_path) -> None:
 
     assert check.repo_id == "owner/sample"
     assert check.private is True
+
+
+def test_hub_check_does_not_create_repo(monkeypatch) -> None:
+    calls = []
+
+    class FakeApi:
+        def whoami(self):
+            return {"name": "tester"}
+
+        def repo_info(self, *, repo_id, repo_type):
+            calls.append(("repo_info", repo_id, repo_type))
+
+        def create_repo(self, **kwargs):
+            calls.append(("create_repo", kwargs))
+
+    monkeypatch.setattr(hub, "_api", FakeApi)
+
+    check = hub.check_hub_access(repo_id="owner/sample", repo_type="dataset", private=True)
+
+    assert check.user == "tester"
+    assert calls == [("repo_info", "owner/sample", "dataset")]
+
+
+def test_upload_preflight_can_create_repo(monkeypatch) -> None:
+    calls = []
+
+    class FakeApi:
+        def whoami(self):
+            return {"name": "tester"}
+
+        def repo_info(self, *, repo_id, repo_type):
+            calls.append(("repo_info", repo_id, repo_type))
+
+        def create_repo(self, **kwargs):
+            calls.append(("create_repo", kwargs))
+
+    monkeypatch.setattr(hub, "_api", FakeApi)
+
+    hub.preflight_upload(repo_id="owner/sample", repo_type="dataset", private=True)
+
+    assert calls == [
+        (
+            "create_repo",
+            {
+                "repo_id": "owner/sample",
+                "repo_type": "dataset",
+                "private": True,
+                "exist_ok": True,
+            },
+        )
+    ]
 
 
 def test_push_mix_updates_manifest_before_upload(monkeypatch, tmp_path) -> None:
@@ -448,3 +572,8 @@ def test_resolve_mix_artifact_rejects_ambiguous_ids(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="Ambiguous mix id"):
         resolve_mix_artifact("sample", store_dir)
+
+
+def test_resolve_mix_artifact_error_suggests_list(tmp_path) -> None:
+    with pytest.raises(FileNotFoundError, match="datamixxer list --store-dir"):
+        resolve_mix_artifact("missing", tmp_path / "store")

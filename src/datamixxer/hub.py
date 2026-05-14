@@ -27,10 +27,16 @@ def _api():
 
 
 def preflight_upload(*, repo_id: str, repo_type: str, private: bool = False) -> None:
-    check_hub_access(repo_id=repo_id, repo_type=repo_type, private=private)
+    check_hub_access(repo_id=repo_id, repo_type=repo_type, private=private, create=True)
 
 
-def check_hub_access(*, repo_id: str, repo_type: str = "dataset", private: bool = False) -> HubCheck:
+def check_hub_access(
+    *,
+    repo_id: str,
+    repo_type: str = "dataset",
+    private: bool = False,
+    create: bool = False,
+) -> HubCheck:
     api = _api()
     try:
         whoami = api.whoami()
@@ -40,14 +46,21 @@ def check_hub_access(*, repo_id: str, repo_type: str = "dataset", private: bool 
             "`huggingface-cli login` before using --push-to-hub"
         ) from exc
 
-    try:
-        api.create_repo(repo_id=repo_id, repo_type=repo_type, private=private, exist_ok=True)
-    except Exception as exc:
-        raise RuntimeError(
-            f"Hugging Face upload preflight failed: cannot create or access "
-            f"{repo_type} repo {repo_id!r}"
-        ) from exc
     user = str(whoami.get("name") or whoami.get("fullname") or whoami.get("email") or "authenticated")
+    try:
+        if create:
+            api.create_repo(repo_id=repo_id, repo_type=repo_type, private=private, exist_ok=True)
+        else:
+            api.repo_info(repo_id=repo_id, repo_type=repo_type)
+    except Exception as exc:
+        action = "create or access" if create else "access"
+        hint = ""
+        if not create:
+            hint = "; this check does not create missing repos"
+        raise RuntimeError(
+            f"Hugging Face upload preflight failed: cannot {action} "
+            f"{repo_type} repo {repo_id!r}{hint}"
+        ) from exc
     return HubCheck(
         repo_id=repo_id,
         repo_type=repo_type,

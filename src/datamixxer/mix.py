@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 import json
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Callable
 
 from datamixxer.hub import HubCheck, check_hub_access, preflight_upload, repo_url, upload_folder
@@ -17,6 +18,7 @@ from datamixxer.standards import (
 
 DEFAULT_STORE_DIR = ".datamixxer/mixes"
 Progress = Callable[[str], None]
+MISSING = object()
 CONFIG_TEMPLATE = """id: my_balanced_mix
 name: My Balanced Mix
 version: v1
@@ -122,12 +124,69 @@ def validate_config(config: dict[str, Any], *, require_hub: bool = False) -> Non
     ):
         raise ValueError("dedupe must be a boolean, string, or mapping")
     normalize_sources(config)
+    warnings = config_warnings(config)
+    if warnings:
+        raise ValueError("; ".join(warnings))
+
+
+def config_warnings(config: dict[str, Any]) -> list[str]:
+    warnings: list[str] = []
+    try:
+        sources = normalize_sources(config)
+    except ValueError:
+        return warnings
+
+    placeholder_dataset_ids = {"owner/dataset-name"}
+    for source in sources:
+        if source.dataset_id in placeholder_dataset_ids:
+            warnings.append(
+                f"{source.name} uses placeholder dataset_id {source.dataset_id!r}; "
+                "replace it with a real Hugging Face dataset id"
+            )
+        if source.dataset_id in placeholder_dataset_ids and source.config == "default":
+            warnings.append(
+                f"{source.name} uses placeholder config 'default'; remove it if the dataset "
+                "has no config or replace it with a real config name"
+            )
+
+    output = config.get("output") or {}
+    hub = output.get("hub") or {}
+    repo_id = hub.get("repo_id")
+    if repo_id == "owner/my_balanced_mix-v1":
+        warnings.append(
+            f"output.hub.repo_id {repo_id!r} looks like a placeholder; "
+            "replace it before publishing"
+        )
+    return warnings
 
 
 def validate_config_file(config_path: str | Path, *, require_hub: bool = False) -> dict[str, Any]:
     config = read_yaml(config_path)
     validate_config(config, require_hub=require_hub)
     return config
+
+
+def check_source_access(config: dict[str, Any]) -> list[str]:
+    """Validate Hugging Face dataset/config/split access without streaming rows."""
+    from datasets import get_dataset_split_names
+
+    errors: list[str] = []
+    for source in normalize_sources(config):
+        try:
+            splits = get_dataset_split_names(source.dataset_id, config_name=source.config)
+        except Exception as exc:
+            errors.append(
+                f"{source.name}: cannot access {source.dataset_id}"
+                f"{f'/{source.config}' if source.config else ''}: {exc}"
+            )
+            continue
+        if source.split not in splits:
+            errors.append(
+                f"{source.name}: split {source.split!r} was not found in "
+                f"{source.dataset_id}{f'/{source.config}' if source.config else ''}; "
+                f"available splits: {', '.join(splits) or 'none'}"
+            )
+    return errors
 
 
 def mix_hash(config: dict[str, Any]) -> str:
@@ -221,7 +280,12 @@ def resolve_mix_artifact(reference: str, store: str | Path | None = None) -> Mix
     path_matches = [artifact for artifact in artifacts if str(artifact.path) == reference]
     if len(path_matches) == 1:
         return path_matches[0]
-    raise FileNotFoundError(f"No mix found for {reference!r}")
+    store_label = str(store or DEFAULT_STORE_DIR)
+    raise FileNotFoundError(
+        f"No mix found for {reference!r} in {store_label}. Run `datamixxer list"
+        f"{f' --store-dir {store_label}' if store else ''}` to see available mixes, "
+        "or pass a mix hash prefix, artifact id, artifact directory, or manifest path."
+    )
 
 
 def _format_candidates(artifacts: list[MixArtifact]) -> str:
@@ -297,6 +361,7 @@ def collect_mix(config: dict[str, Any], progress: Progress | None = None) -> dic
             seed + source.index,
             buffer_size,
         )
+        start = perf_counter()
 
         for row in iterator:
             scanned += 1
@@ -312,6 +377,15 @@ def collect_mix(config: dict[str, Any], progress: Progress | None = None) -> dic
             collected.append(row)
             if len(collected) >= needed:
                 break
+            if progress and scanned % _progress_interval(needed) == 0:
+                elapsed = max(perf_counter() - start, 0.001)
+                rate = scanned / elapsed
+                progress(
+                    "Progress "
+                    f"{source.name}: collected={len(collected)}/{needed} "
+                    f"scanned={scanned} duplicates={duplicates} "
+                    f"skipped_non_dict={skipped_non_dict} rate={rate:.1f} rows/s"
+                )
 
         if len(collected) != needed:
             raise RuntimeError(
@@ -446,6 +520,8 @@ def dedupe_key(row: dict[str, Any], dedupe_config: Any) -> str | None:
         value = row.get("messages", row)
     elif isinstance(dedupe_config, str):
         value = select_key(row, dedupe_config)
+        if value is MISSING:
+            raise ValueError(f"dedupe field {dedupe_config!r} was not found in a source row")
     elif isinstance(dedupe_config, dict):
         if dedupe_config.get("enabled", True) is False:
             return None
@@ -453,9 +529,17 @@ def dedupe_key(row: dict[str, Any], dedupe_config: Any) -> str | None:
         if fields is None:
             value = row.get("messages", row)
         elif isinstance(fields, list):
-            value = {field: select_key(row, str(field)) for field in fields}
+            value = {}
+            for field in fields:
+                selected = select_key(row, str(field))
+                if selected is MISSING:
+                    raise ValueError(f"dedupe field {str(field)!r} was not found in a source row")
+                value[field] = selected
         else:
-            value = select_key(row, str(fields))
+            field = str(fields)
+            value = select_key(row, field)
+            if value is MISSING:
+                raise ValueError(f"dedupe field {field!r} was not found in a source row")
     else:
         raise ValueError("dedupe must be a boolean, string, or mapping")
     return json.dumps(value, sort_keys=True, ensure_ascii=False)
@@ -469,8 +553,12 @@ def select_key(row: dict[str, Any], path: str) -> Any:
         if isinstance(value, dict) and part in value:
             value = value[part]
         else:
-            return None
+            return MISSING
     return value
+
+
+def _progress_interval(needed: int) -> int:
+    return max(1_000, needed // 10)
 
 
 def materialize_rows(
@@ -658,8 +746,10 @@ def build_mix(config_path: str | Path, *, push: bool | None = None, force: bool 
         validate_config(config, require_hub=True)
     hash_value = mix_hash(config)
     artifact = None if force else find_existing_mix(config, hash_value)
+    sources = normalize_sources(config)
     print(f"Building mix {hash_value[:12]}")
     print(f"Store: {output_dir_for(config, hash_value)}")
+    print(f"Plan: {sum(source.count for source in sources)} rows across {len(sources)} sources")
     if artifact is None:
         rows_by_split = collect_mix(config, progress=print)
         artifact = write_mix_artifacts(

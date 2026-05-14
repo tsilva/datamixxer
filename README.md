@@ -18,11 +18,13 @@ and test keep the same blend.
 uv sync
 ```
 
-Start a config, validate it, preview the plan, then build:
+Start a config, edit the placeholder dataset and Hub fields, validate it,
+preview the plan, then build:
 
 ```bash
 uv run datamixxer init my_mix.yaml
 uv run datamixxer validate configs/smoltalk_style_mix.yaml
+uv run datamixxer validate configs/smoltalk_style_mix.yaml --check-sources
 uv run datamixxer plan configs/smoltalk_style_mix.yaml --explain-hash
 uv run datamixxer build configs/smoltalk_style_mix.yaml --no-push-to-hub
 ```
@@ -105,13 +107,14 @@ plan:
 
 ```bash
 uv run datamixxer init my_mix.yaml                                      # write starter config
-uv run datamixxer validate configs/smoltalk_style_mix.yaml              # validate config
+uv run datamixxer validate configs/smoltalk_style_mix.yaml              # validate config shape
+uv run datamixxer validate configs/smoltalk_style_mix.yaml --check-sources  # verify Hub dataset/config/split access
 uv run datamixxer plan configs/smoltalk_style_mix.yaml --explain-hash   # preview rows and hash inputs
 uv run datamixxer build configs/smoltalk_style_mix.yaml --no-push-to-hub  # build locally
 uv run datamixxer build configs/smoltalk_style_mix.yaml --push-to-hub     # build and upload
 uv run datamixxer list                                                    # list local mixes
 uv run datamixxer show <mix-hash-or-artifact-id>                          # inspect a mix
-uv run datamixxer hub-check configs/smoltalk_style_mix.yaml               # check Hub auth/repo access
+uv run datamixxer hub-check configs/smoltalk_style_mix.yaml               # check Hub auth/repo access without creating repos
 uv run datamixxer push <mix-hash-or-artifact-id> --repo-id owner/name      # upload later
 uv sync --extra dev                                                       # install test/lint tools
 uv run pytest                                                             # run tests
@@ -134,7 +137,13 @@ uv run ruff check .                                                       # run 
   per-source `metadata`.
 - Hub uploads require `HF_TOKEN` or `huggingface-cli login` before using
   `--push-to-hub` or `datamixxer push`. Use `hub-check` before a long build to
-  verify authentication and target repo access.
+  verify authentication and target repo access. `hub-check` is non-mutating; it
+  does not create missing repos. Upload commands create the target repo when
+  needed.
+- `validate` catches unedited starter placeholders. Add `--check-sources` when
+  you want to verify that every configured Hugging Face dataset/config/split can
+  be reached before starting a streaming build.
+- `plan` prints both the full `mix_hash` and a copy-friendly `short_hash`.
 
 ## Architecture
 

@@ -6,6 +6,7 @@ from typing import Any
 from datamixxer.mix import (
     MixPlan,
     build_mix,
+    check_source_access,
     explain_hash,
     hub_check_for_config,
     list_mix_artifacts,
@@ -50,6 +51,11 @@ def main() -> None:
         "--push-to-hub",
         action="store_true",
         help="also require Hub publishing settings to be present",
+    )
+    validate.add_argument(
+        "--check-sources",
+        action="store_true",
+        help="also verify Hugging Face dataset/config/split access without streaming rows",
     )
 
     build = subparsers.add_parser(
@@ -97,7 +103,7 @@ Use --force to rebuild anyway.""",
 
     hub_check = subparsers.add_parser(
         "hub-check",
-        help="Check Hugging Face auth and target repo access",
+        help="Check Hugging Face auth and target repo access without creating repos",
     )
     hub_check.add_argument("config", help="YAML mix config")
     hub_check.add_argument("--repo-id", default=None, help="override output.hub repo")
@@ -109,7 +115,12 @@ Use --force to rebuild anyway.""",
             path = write_config_template(args.config, overwrite=args.force)
             print(f"Wrote starter config to {path}")
         elif args.command == "validate":
-            validate_config_file(args.config, require_hub=args.push_to_hub)
+            config = validate_config_file(args.config, require_hub=args.push_to_hub)
+            if args.check_sources:
+                source_errors = check_source_access(config)
+                if source_errors:
+                    raise ValueError("source access check failed: " + "; ".join(source_errors))
+                print("Source access OK.")
             print(f"Config is valid: {args.config}")
         elif args.command == "build":
             build_mix(args.config, push=args.push_to_hub, force=args.force)
@@ -151,6 +162,7 @@ Use --force to rebuild anyway.""",
 def print_mix_list(artifacts: list[Any]) -> None:
     if not artifacts:
         print("No local mixes found.")
+        print("Next: run `datamixxer build <config.yaml>` or pass `--store-dir` if mixes live elsewhere.")
         return
     headers = ["hash", "id", "version", "rows", "pushed", "repo", "path"]
     rows = []
@@ -178,6 +190,7 @@ def print_mix_plan(plan: MixPlan) -> None:
     train_rows = sum(source.train_count for source in plan.sources)
     test_rows = sum(source.test_count for source in plan.sources)
     print(f"hash: {plan.hash_value}")
+    print(f"short_hash: {plan.hash_value[:12]}")
     print(f"id: {config.get('id')}")
     print(f"version: {config.get('version') or config.get('artifact_version') or 'v1'}")
     print(f"name: {config.get('name') or ''}")
@@ -203,6 +216,9 @@ def print_mix_plan(plan: MixPlan) -> None:
         for source in plan.sources
     ]
     print_table(["bucket", "dataset", "config", "split", "count", "train", "test"], rows)
+    print("\nnext:")
+    print("  datamixxer build <config.yaml> --no-push-to-hub")
+    print(f"  datamixxer show {plan.hash_value[:12]}")
 
 
 def print_mix_details(manifest: dict[str, Any]) -> None:
