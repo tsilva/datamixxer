@@ -230,6 +230,7 @@ def validate_config(config: dict[str, Any], *, require_hub: bool = False) -> Non
         or dedupe_config is None
     ):
         raise ValueError("dedupe must be a boolean, string, or mapping")
+    normalize_tagging_rules(config)
     normalize_sources(config)
     warnings = config_warnings(config)
     if warnings:
@@ -438,7 +439,8 @@ def mix_hash(config: dict[str, Any]) -> str:
 
 def mix_hash_payload(config: dict[str, Any]) -> dict[str, Any]:
     sources = normalize_sources(config)
-    return {
+    tagging = normalize_tagging_rules(config)
+    payload = {
         "schema_version": 1,
         "seed": int(config.get("seed", 3407)),
         "buffer_size": int(config.get("buffer_size", 10_000)),
@@ -459,6 +461,9 @@ def mix_hash_payload(config: dict[str, Any]) -> dict[str, Any]:
             for source in sources
         ],
     }
+    if tagging:
+        payload["tagging"] = tagging
+    return payload
 
 
 def store_dir(config: dict[str, Any] | None = None, explicit: str | Path | None = None) -> Path:
@@ -649,7 +654,10 @@ def collect_mix(config: dict[str, Any], progress: Progress | None = None) -> dic
                 f"scanned={scanned} duplicates={duplicates} skipped_non_dict={skipped_non_dict}"
             )
 
-    return {name: rows for name, rows in rows_by_split.items() if rows}
+    return apply_tagging(
+        {name: rows for name, rows in rows_by_split.items() if rows},
+        config,
+    )
 
 
 def normalize_sources(config: dict[str, Any]) -> list[MixSource]:
@@ -702,6 +710,92 @@ def normalize_sources(config: dict[str, Any]) -> list[MixSource]:
                 raw=item,
             )
         )
+    return normalized
+
+
+def normalize_tagging_rules(config: dict[str, Any]) -> list[dict[str, Any]]:
+    tagging = config.get("tagging", [])
+    if tagging in (None, False):
+        return []
+    if isinstance(tagging, dict):
+        raw_rules = [tagging]
+    elif isinstance(tagging, list):
+        raw_rules = tagging
+    else:
+        raise ValueError("tagging must be a mapping, list, false, or null")
+
+    rules: list[dict[str, Any]] = []
+    for index, raw_rule in enumerate(raw_rules):
+        path = f"tagging[{index}]"
+        if not isinstance(raw_rule, dict):
+            raise ValueError(f"{path} must be a mapping")
+        rate = _first_present(raw_rule, ("rate", "percentage", "percent"), path)
+        split_test_count(100, rate, path=f"{path}.rate")
+        tags = raw_rule.get("tags")
+        if not isinstance(tags, dict) or not tags:
+            raise ValueError(f"{path}.tags must be a non-empty mapping")
+        try:
+            json.dumps(tags, sort_keys=True, ensure_ascii=False)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{path}.tags must be JSON serializable") from exc
+        balance_by = _normalize_string_list(
+            raw_rule.get(
+                "balance_by",
+                ["source_dataset", "source_config", "source_split", "output_split"],
+            ),
+            path=f"{path}.balance_by",
+        )
+        output_splits = _normalize_optional_string_list(
+            _first_present(
+                raw_rule,
+                ("output_splits", "output_split", "splits", "split"),
+                path,
+                default=None,
+            ),
+            path=f"{path}.output_splits",
+        )
+        rules.append(
+            {
+                "rate": rate,
+                "tags": dict(tags),
+                "balance_by": balance_by,
+                "output_splits": output_splits,
+            }
+        )
+    return rules
+
+
+def _first_present(
+    data: dict[str, Any],
+    keys: tuple[str, ...],
+    path: str,
+    *,
+    default: Any = MISSING,
+) -> Any:
+    for key in keys:
+        if key in data:
+            return data[key]
+    if default is not MISSING:
+        return default
+    raise ValueError(f"{path} is missing {keys[0]}")
+
+
+def _normalize_optional_string_list(value: Any, *, path: str) -> list[str] | None:
+    if value in (None, False):
+        return None
+    return _normalize_string_list(value, path=path)
+
+
+def _normalize_string_list(value: Any, *, path: str) -> list[str]:
+    if isinstance(value, str):
+        values = [value]
+    elif isinstance(value, list):
+        values = value
+    else:
+        raise ValueError(f"{path} must be a string or list of strings")
+    normalized = [str(item).strip() for item in values]
+    if not normalized or any(not item for item in normalized):
+        raise ValueError(f"{path} must not be empty")
     return normalized
 
 
@@ -826,6 +920,77 @@ def materialize_rows(
         output.setdefault("source", row.get("source", source.split))
         materialized.append(output)
     return materialized
+
+
+def apply_tagging(
+    rows_by_split: dict[str, list[dict[str, Any]]],
+    config: dict[str, Any],
+) -> dict[str, list[dict[str, Any]]]:
+    rules = normalize_tagging_rules(config)
+    if not rules:
+        return rows_by_split
+
+    seed = int(config.get("seed", 3407))
+    for rule_index, rule in enumerate(rules):
+        target_splits = set(rule["output_splits"] or rows_by_split)
+        balance_by = rule["balance_by"]
+        for split_name, rows in rows_by_split.items():
+            if split_name not in target_splits:
+                continue
+            groups: dict[tuple[str, ...], list[int]] = {}
+            for row_index, row in enumerate(rows):
+                key = tuple(_tagging_group_value(row, field) for field in balance_by)
+                groups.setdefault(key, []).append(row_index)
+            for group_key, row_indexes in groups.items():
+                tag_count = split_test_count(
+                    len(row_indexes),
+                    rule["rate"],
+                    path=f"tagging[{rule_index}].rate",
+                )
+                if tag_count <= 0:
+                    continue
+                ranked = sorted(
+                    row_indexes,
+                    key=lambda row_index: _tagging_rank(
+                        seed=seed,
+                        rule_index=rule_index,
+                        split_name=split_name,
+                        group_key=group_key,
+                        row_index=row_index,
+                        row=rows[row_index],
+                    ),
+                )
+                for row_index in ranked[:tag_count]:
+                    rows[row_index].update(rule["tags"])
+    return rows_by_split
+
+
+def _tagging_group_value(row: dict[str, Any], field: str) -> str:
+    value = select_key(row, field)
+    if value is MISSING:
+        return ""
+    return json.dumps(value, sort_keys=True, ensure_ascii=False)
+
+
+def _tagging_rank(
+    *,
+    seed: int,
+    rule_index: int,
+    split_name: str,
+    group_key: tuple[str, ...],
+    row_index: int,
+    row: dict[str, Any],
+) -> str:
+    payload = {
+        "seed": seed,
+        "rule_index": rule_index,
+        "split_name": split_name,
+        "group_key": group_key,
+        "row_index": row_index,
+        "row": row,
+    }
+    encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def counts_by_key(rows: list[dict[str, Any]], key: str) -> dict[str, int]:

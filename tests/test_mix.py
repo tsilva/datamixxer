@@ -313,6 +313,80 @@ def test_collect_mix_closes_stream_iterator_after_collecting_needed_rows(monkeyp
     assert stream.closed is True
 
 
+def test_collect_mix_tags_rate_by_provenance_for_target_output_split(monkeypatch) -> None:
+    def fake_stream_rows(dataset_id, config, split, seed, buffer_size):
+        for index in range(20):
+            yield {
+                "id": f"{dataset_id}-{index}",
+                "messages": [{"role": "user", "content": f"{dataset_id}-{index}"}],
+            }
+
+    monkeypatch.setattr(mix, "stream_rows", fake_stream_rows)
+
+    rows_by_split = mix.collect_mix(
+        {
+            "id": "sample",
+            "seed": 1,
+            "split": {"test_size": 0.2},
+            "sources": [
+                {"name": "alpha", "dataset_id": "org/alpha", "split": "train", "count": 10},
+                {"name": "beta", "dataset_id": "org/beta", "split": "train", "count": 10},
+            ],
+            "tagging": [
+                {
+                    "rate": 0.25,
+                    "output_splits": ["train"],
+                    "tags": {"restyle": True, "target_style": "plain"},
+                }
+            ],
+        }
+    )
+
+    tagged_train = [row for row in rows_by_split["train"] if row.get("restyle") is True]
+    tagged_test = [row for row in rows_by_split["test"] if row.get("restyle") is True]
+
+    assert mix.counts_by_key(tagged_train, "source_dataset") == {"org/alpha": 2, "org/beta": 2}
+    assert all(row["target_style"] == "plain" for row in tagged_train)
+    assert tagged_test == []
+
+
+def test_validate_config_rejects_invalid_tagging_rules() -> None:
+    with pytest.raises(ValueError, match="tagging\\[0\\].tags must be a non-empty mapping"):
+        validate_config(
+            {
+                "id": "sample",
+                "sources": [
+                    {"name": "alpha", "dataset_id": "org/alpha", "split": "train", "count": 1}
+                ],
+                "tagging": [{"rate": 0.2, "tags": {}}],
+            }
+        )
+
+
+def test_mix_hash_changes_for_tagging() -> None:
+    base = {
+        "id": "sample",
+        "seed": 1,
+        "sources": [{"name": "alpha", "dataset_id": "org/alpha", "split": "train", "count": 2}],
+    }
+    tagged = {
+        **base,
+        "tagging": [{"rate": 0.5, "output_splits": ["train"], "tags": {"restyle": True}}],
+    }
+
+    assert mix_hash(base) != mix_hash(tagged)
+
+
+def test_empty_tagging_does_not_change_mix_hash() -> None:
+    base = {
+        "id": "sample",
+        "seed": 1,
+        "sources": [{"name": "alpha", "dataset_id": "org/alpha", "split": "train", "count": 2}],
+    }
+
+    assert mix_hash(base) == mix_hash({**base, "tagging": []})
+
+
 def test_mix_hash_ignores_output_but_changes_for_seed() -> None:
     base = {
         "id": "sample",

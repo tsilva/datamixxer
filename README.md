@@ -48,6 +48,13 @@ dedupe: true
 split:
   test_size: 0.1
 
+tagging:
+  - rate: 0.2
+    output_splits: [train]
+    tags:
+      restyle: true
+      target_style: plain
+
 sources:
   - name: math
     dataset_id: org/math-dataset
@@ -84,6 +91,12 @@ Common optional fields:
 - `seed`: base shuffle seed. Defaults to `3407`.
 - `buffer_size`: streaming shuffle buffer. Defaults to `10000`.
 - `split.test_size`: fraction, percentage, or row count for each bucket's test split.
+- `tagging`: deterministic row tagging rules applied after the mix is built.
+- Tagging `rate`: fraction, percentage, or row count per balanced group.
+- Tagging `output_splits`: optional output split filter such as `[train]`.
+- Tagging `balance_by`: optional provenance fields. Defaults to
+  `source_dataset`, `source_config`, `source_split`, and `output_split`.
+- Tagging `tags`: mapping added to selected rows, for example `restyle: true`.
 - `dedupe`: `true`, `false`, a field path such as `messages`, or a mapping with `field`/`fields`.
 - Source `config`: dataset config/subset name.
 - Source `metadata`: mapping copied into every output row for that source.
@@ -94,7 +107,7 @@ Common optional fields:
 - `output.hub.private`: create or update the target Hub repo as private.
 - `output.hub.commit_message`: Hub upload commit message.
 - Source `train_count` and `test_count`: advanced alternative to `count` plus `split.test_size`.
-- Source `restyle`: compatibility flag copied into output rows.
+- Source `restyle`: legacy compatibility flag copied into every row from that source.
 
 The older shared-source shape used by `llmstyler` is still supported for
 existing configs, but new configs should use `sources`:
@@ -154,6 +167,8 @@ uv run ruff check .                                                        # run
 - Each output row keeps the source row fields and adds `bucket`,
   `source_dataset`, `source_config`, `source_split`, `output_split`, and any
   per-source `metadata`.
+- Tagging rules use those provenance fields to select an exact deterministic
+  share of rows per group. Use `output_splits: [train]` to tag only train rows.
 - Hub uploads require `HF_TOKEN` or `hf auth login` before using
   `--push-to-hub` or `datamixxer publish`. Use `doctor --push-to-hub` or
   `publish --check` before a long build to verify authentication and target repo
