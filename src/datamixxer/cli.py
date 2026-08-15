@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 import sys
+from pathlib import Path
 from typing import Any
 
 from datamixxer.mix import (
@@ -21,8 +21,8 @@ from datamixxer.mix import (
     resolve_mix_artifact,
     validate_config_file,
     validate_sample_rows,
-    write_new_config,
     write_config_template,
+    write_new_config,
 )
 
 
