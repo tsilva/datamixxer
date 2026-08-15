@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 import datamixxer.hub as hub
 import datamixxer.mix as mix
-import pytest
 from datamixxer.cli import print_mix_plan
 from datamixxer.io import read_yaml
 from datamixxer.mix import (
@@ -26,8 +27,8 @@ from datamixxer.mix import (
     validate_config,
     validate_config_file,
     validate_sample_rows,
-    write_new_config,
     write_config_template,
+    write_new_config,
 )
 
 

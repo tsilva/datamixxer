@@ -15,7 +15,7 @@ and test keep the same blend.
 ## Install
 
 ```bash
-uv sync
+uv sync --config-file uv.toml --frozen
 ```
 
 Create a config for a first source, run the combined preflight check, preview
@@ -145,9 +145,9 @@ uv run datamixxer list                                                     # lis
 uv run datamixxer show my_mix.yaml                                         # inspect the built mix or preview the config
 uv run datamixxer publish my_mix.yaml --repo-id owner/name                 # upload a built mix
 uv run datamixxer publish my_mix.yaml --repo-id owner/name --check         # check Hub auth/repo access
-uv sync --extra dev                                                        # install test/lint tools
-uv run pytest                                                              # run tests
-uv run ruff check .                                                        # run lint checks
+uv sync --config-file uv.toml --frozen --all-extras                        # install test/lint tools
+uv run --frozen pytest                                                     # run tests
+uv run --frozen ruff check .                                               # run lint checks
 ```
 
 `push` and `hub-check` are kept as hidden compatibility aliases. Prefer
