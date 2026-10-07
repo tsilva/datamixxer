@@ -1,8 +1,10 @@
-<div align="center">
+<p align="center">
   <img src="./logo.png" alt="datamixxer" width="420" />
-
-  **🧪 Deterministic balanced dataset mixes 🧪**
-</div>
+  <br />
+  <!-- repo-tagline:start -->
+  <strong>🧪 Deterministic balanced dataset mixes 🧪</strong>
+  <!-- repo-tagline:end -->
+</p>
 
 `datamixxer` is a Python CLI for building balanced subsamples from Hugging Face
 datasets. It reads a YAML config, streams each source split, shuffles
