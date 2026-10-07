@@ -1,8 +1,10 @@
-<div align="center">
+<p align="center">
   <img src="./logo.png" alt="datamixxer" width="420" />
-
-  **🧪 Deterministic balanced dataset mixes 🧪**
-</div>
+  <br />
+  <!-- repo-tagline:start -->
+  <strong>🧪 Deterministic balanced dataset mixes 🧪</strong>
+  <!-- repo-tagline:end -->
+</p>
 
 `datamixxer` is a Python CLI for building balanced subsamples from Hugging Face
 datasets. It reads a YAML config, streams each source split, shuffles
@@ -203,3 +205,11 @@ uv run --frozen ruff check .                                               # run
 ## License
 
 No license file is present in this repository yet.
+
+## Secret scanning
+
+GitHub Actions scans changed commits with the pinned Infisical CLI. New branches
+and rewritten pushes scan the complete history reachable from the new head, even
+when the previous commit is no longer available. Missing pull-request revisions
+and scanner errors still fail the check. Reports publish only finding locations;
+credentials and matched source content remain private.
