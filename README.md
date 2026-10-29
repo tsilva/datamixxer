@@ -16,6 +16,10 @@ and test keep the same blend.
 
 ## Install
 
+Dependency resolution keeps the seven-day release-age setting in `uv.toml` and
+the security constraints in `[tool.uv]` in `pyproject.toml`. Keep both files with
+the committed `uv.lock` when updating dependencies.
+
 ```bash
 uv sync --config-file uv.toml --frozen
 ```
