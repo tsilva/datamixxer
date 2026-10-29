@@ -49,4 +49,7 @@ constraint-dependencies = [
   "pytest>=9.0.3",
   "mistralai!=2.4.6",
   "guardrails-ai!=0.10.1",
+  "certifi>=2026.10.19",
+  "filelock>=4.2.1",
+  "msgpack>=1.2.3",
 ]
