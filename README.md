@@ -14,6 +14,11 @@ Each build produces JSONL split files, `manifest.json`, and a dataset card. When
 a test split is configured, each source bucket is split independently so train
 and test keep the same blend.
 
+For speaking-style datasets, use [llmstyler](https://github.com/tsilva/llmstyler)
+to rewrite the rows marked by datamixxer's tagging rules. Follow llmstyler's
+published setup and provider configuration before running rewrites. Datamixxer
+builds the source mix without making LLM calls.
+
 ## Install
 
 Dependency resolution keeps the seven-day release-age setting in `uv.toml` and
@@ -105,6 +110,11 @@ Common optional fields:
 - Tagging `tags`: mapping added to selected rows, for example `restyle: true`.
 - `dedupe`: `true`, `false`, a field path such as `messages`, or a mapping with `field`/`fields`.
 - Source `config`: dataset config/subset name.
+- Source `revision`: Hugging Face dataset revision. Prefer a full commit SHA to
+  freeze the input data; branches and tags may move. The revision is used by
+  source checks and streaming, included in the mix hash and manifest, and copied
+  into row provenance as `source_revision`. The older shared `source` mapping
+  also supports `revision`.
 - Source `metadata`: mapping copied into every output row for that source.
 - `output.store_dir`: local artifact store. Defaults to `.datamixxer/mixes`.
 - `output.train_file` and `output.test_file`: output JSONL filenames.
@@ -189,6 +199,20 @@ uv run --frozen ruff check .                                               # run
 - `plan` prints a copy-friendly `Short hash`; add `--sample-rows` for row
   examples or `--explain-hash` to print the full hash and normalized hash inputs.
 
+## Artifact references for integrations
+
+```bash
+uv run datamixxer show my_mix.yaml --json
+uv run datamixxer show <mix-hash> --json
+```
+
+JSON output contains `schema_version: 1`, `mix_hash`, an absolute `path`,
+`built`, and `manifest`. For an unbuilt config, `built` is false and `manifest`
+is null; the path is the planned destination. Built artifacts include their
+manifest with split filenames and row counts. Consumers should check the schema
+version and built status before opening files. Human-readable output remains
+the default.
+
 ## Common Errors
 
 - `Config has setup items to fix`: replace starter placeholders such as
@@ -206,10 +230,6 @@ uv run --frozen ruff check .                                               # run
 
 ![datamixxer architecture diagram](./architecture.png)
 
-## License
-
-No license file is present in this repository yet.
-
 ## Secret scanning
 
 GitHub Actions scans changed commits with the pinned Infisical CLI. New branches
@@ -217,3 +237,7 @@ and rewritten pushes scan the complete history reachable from the new head, even
 when the previous commit is no longer available. Missing pull-request revisions
 and scanner errors still fail the check. Reports publish only finding locations;
 credentials and matched source content remain private.
+
+## License
+
+[MIT License](LICENSE).

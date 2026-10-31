@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ from datamixxer.mix import (
     hub_check_for_config,
     inspect_dataset,
     list_mix_artifacts,
+    mix_is_complete,
     plan_mix,
     push_mix,
     push_mix_artifact,
@@ -151,6 +153,7 @@ Use --force to rebuild anyway.""",
     show = subparsers.add_parser("show", help="Show local dataset mix details")
     show.add_argument("mix", help="mix hash prefix, artifact id, artifact path, manifest path, or config YAML")
     show.add_argument("--store-dir", default=None, help="mix store directory")
+    show.add_argument("--json", action="store_true", help="emit a versioned artifact reference")
 
     publish = subparsers.add_parser("publish", help="Publish a built dataset mix to Hugging Face Hub")
     add_publish_arguments(publish)
@@ -239,7 +242,7 @@ Use --force to rebuild anyway.""",
         elif args.command == "list":
             print_mix_list(list_mix_artifacts(args.store_dir))
         elif args.command == "show":
-            print_show(args.mix, args.store_dir)
+            print_show(args.mix, args.store_dir, as_json=args.json)
         elif args.command == "publish":
             if args.check:
                 check = hub_check_for_config(
@@ -398,7 +401,25 @@ def print_mix_details(manifest: dict[str, Any]) -> None:
         )
 
 
-def print_show(reference: str, store_dir: str | None) -> None:
+def print_show(reference: str, store_dir: str | None, *, as_json: bool = False) -> None:
+    if as_json:
+        if _looks_like_yaml(reference):
+            plan = plan_mix(reference)
+            artifact = plan.artifact
+            path = plan.path
+            hash_value = plan.hash_value
+        else:
+            artifact = resolve_mix_artifact(reference, store_dir)
+            path = artifact.path
+            hash_value = artifact.manifest["mix_hash"]
+        print(json.dumps({
+            "schema_version": 1,
+            "mix_hash": hash_value,
+            "path": str(path.resolve()),
+            "built": artifact is not None and mix_is_complete(artifact),
+            "manifest": artifact.manifest if artifact else None,
+        }, ensure_ascii=False))
+        return
     if _looks_like_yaml(reference):
         plan = plan_mix(reference)
         if plan.artifact:

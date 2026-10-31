@@ -88,6 +88,7 @@ class MixSource:
     train_count: int
     test_count: int
     raw: dict[str, Any]
+    revision: str | None = None
 
 
 @dataclass(frozen=True)
@@ -119,13 +120,22 @@ class RowSample:
     scanned: int
 
 
-def stream_rows(dataset_id: str, config: str | None, split: str, seed: int, buffer_size: int):
+def stream_rows(
+    dataset_id: str, config: str | None, split: str, seed: int, buffer_size: int,
+    *, revision: str | None = None,
+):
     from datasets import disable_progress_bar, load_dataset
 
     disable_progress_bar()
-    dataset = load_dataset(dataset_id, config, split=split, streaming=True)
+    dataset = load_dataset(dataset_id, config, split=split, streaming=True,
+                           **({"revision": revision} if revision else {}))
     shuffled = dataset.shuffle(seed=seed, buffer_size=buffer_size)
     yield from shuffled
+
+
+def stream_source_rows(source: MixSource, seed: int, buffer_size: int):
+    return stream_rows(source.dataset_id, source.config, source.split, seed, buffer_size,
+                       **({"revision": source.revision} if source.revision else {}))
 
 
 def close_iterator(iterator: Any) -> None:
@@ -279,7 +289,10 @@ def check_source_access(config: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     for source in normalize_sources(config):
         try:
-            splits = get_dataset_split_names(source.dataset_id, config_name=source.config)
+            splits = get_dataset_split_names(
+                source.dataset_id, config_name=source.config,
+                **({"revision": source.revision} if source.revision else {}),
+            )
         except Exception as exc:
             errors.append(
                 f"{source.name}: cannot access {source.dataset_id}"
@@ -306,13 +319,7 @@ def validate_sample_rows(config: dict[str, Any], sample_rows: int) -> list[str]:
     for source in normalize_sources(config):
         iterator = None
         try:
-            iterator = stream_rows(
-                source.dataset_id,
-                source.config,
-                source.split,
-                seed + source.index,
-                buffer_size,
-            )
+            iterator = stream_source_rows(source, seed + source.index, buffer_size)
             checked = 0
             for row in iterator:
                 if not isinstance(row, dict):
@@ -343,13 +350,7 @@ def collect_row_samples(config: dict[str, Any], sample_rows: int) -> list[RowSam
     for source in normalize_sources(config):
         rows: list[dict[str, Any]] = []
         scanned = 0
-        iterator = stream_rows(
-            source.dataset_id,
-            source.config,
-            source.split,
-            seed + source.index,
-            buffer_size,
-        )
+        iterator = stream_source_rows(source, seed + source.index, buffer_size)
         try:
             for row in iterator:
                 scanned += 1
@@ -457,6 +458,7 @@ def mix_hash_payload(config: dict[str, Any]) -> dict[str, Any]:
                 "test_count": source.test_count,
                 "restyle": source.raw.get("restyle"),
                 "metadata": source.raw.get("metadata") or {},
+                **({"revision": source.revision} if source.revision else {}),
             }
             for source in sources
         ],
@@ -599,13 +601,7 @@ def collect_mix(config: dict[str, Any], progress: Progress | None = None) -> dic
                 f"{source.name}: {needed} rows from {_source_label(source)} "
                 f"(train={source.train_count}, test={source.test_count})"
             )
-        iterator = stream_rows(
-            source.dataset_id,
-            source.config,
-            source.split,
-            seed + source.index,
-            buffer_size,
-        )
+        iterator = stream_source_rows(source, seed + source.index, buffer_size)
         start = perf_counter()
 
         try:
@@ -685,6 +681,9 @@ def normalize_sources(config: dict[str, Any]) -> list[MixSource]:
         if not dataset_id:
             raise ValueError(f"{path} is missing dataset_id")
         dataset_config = item.get("config", item.get("subset", shared_source.get("config")))
+        revision = item.get("revision", shared_source.get("revision"))
+        if revision is not None and (not isinstance(revision, str) or not revision.strip()):
+            raise ValueError(f"{path}.revision must be a non-empty string")
         source_split = item.get("split")
         if not source_split:
             raise ValueError(f"{path} is missing split")
@@ -708,6 +707,7 @@ def normalize_sources(config: dict[str, Any]) -> list[MixSource]:
                 train_count=train_count,
                 test_count=test_count,
                 raw=item,
+                revision=revision,
             )
         )
     return normalized
@@ -916,6 +916,8 @@ def materialize_rows(
         output["source_dataset"] = source.dataset_id
         output["source_config"] = source.config
         output["source_split"] = source.split
+        if source.revision:
+            output["source_revision"] = source.revision
         output["output_split"] = output_split
         output.setdefault("source", row.get("source", source.split))
         materialized.append(output)
@@ -1039,6 +1041,7 @@ def write_mix_artifacts(
             "count": source.count,
             "train_count": source.train_count,
             "test_count": source.test_count,
+            **({"revision": source.revision} if source.revision else {}),
         }
         for source in sources
     ]
