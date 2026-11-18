@@ -1,0 +1,570 @@
+{
+  "version": 1,
+  "default": "hf-publish",
+  "profiles": {
+    "hf-publish": {
+      "ready": true,
+      "provider": {
+        "type": "infisical",
+        "instance": "https://app.infisical.com",
+        "project-id": "5078c850-3f93-46d8-8afe-82107df8b931",
+        "access-bundle": "local-datamixxer-hf-publisher",
+        "source": {
+          "project-id": "cba79865-b229-4181-909b-0da11a052799",
+          "environment": "prod",
+          "secret-path": "/huggingface-write-mac"
+        }
+      },
+      "session": {
+        "ttl": "30m",
+        "proxy": "127.0.0.1:8283"
+      },
+      "environment": {
+        "HF_TOKEN": "huggingface_write_proxy_placeholder",
+        "HF_ENDPOINT": "http://127.0.0.1:19416",
+        "HF_HUB_DISABLE_IMPLICIT_TOKEN": "1",
+        "HF_HUB_DISABLE_XET": "1",
+        "HF_HUB_DISABLE_TELEMETRY": "1",
+        "HF_HUB_DISABLE_PROGRESS_BARS": "1"
+      },
+      "execution": {
+        "sandbox": "macos-command",
+        "command": "datamixxer",
+        "argv": [
+          "{python}",
+          "-I",
+          "-S",
+          "-B",
+          "{release}/runbox.pyz",
+          "--command-child"
+        ],
+        "arguments": [
+          [
+            "publish",
+            {
+              "pattern": "artifacts/[A-Za-z0-9_][A-Za-z0-9_./-]{0,511}"
+            },
+            "--repo-id",
+            {
+              "pattern": "tsilva/[A-Za-z0-9_][A-Za-z0-9_.-]{0,95}"
+            }
+          ],
+          [
+            "publish",
+            {
+              "pattern": "artifacts/[A-Za-z0-9_][A-Za-z0-9_./-]{0,511}"
+            },
+            "--repo-id",
+            {
+              "pattern": "tsilva/[A-Za-z0-9_][A-Za-z0-9_.-]{0,95}"
+            },
+            "--private"
+          ]
+        ],
+        "cwd": "repo",
+        "integrity": {
+          "files": [
+            "pyproject.toml",
+            "uv.lock",
+            "src/datamixxer/__init__.py",
+            "src/datamixxer/cli.py",
+            "src/datamixxer/hub.py",
+            "src/datamixxer/io.py",
+            "src/datamixxer/mix.py",
+            "src/datamixxer/standards.py"
+          ]
+        },
+        "client": {
+          "type": "python",
+          "entrypoint": "datamixxer.cli:main"
+        },
+        "outputs": {
+          "artifact": {
+            "argument": 2,
+            "when-prefix": [
+              "datamixxer",
+              "publish"
+            ],
+            "kind": "working-directory",
+            "within": "artifacts",
+            "relative-to": "repo",
+            "separate-from": [],
+            "exclude": []
+          }
+        },
+        "permissions": {
+          "read": [
+            {
+              "directory": "{python-root}"
+            },
+            {
+              "directory": "{release}"
+            },
+            {
+              "directory": "{hf-sdk}"
+            },
+            {
+              "file": "{ca-file}"
+            },
+            {
+              "file": "{repo}"
+            },
+            {
+              "directory": "{repo}/src"
+            },
+            {
+              "directory": "{artifact}"
+            }
+          ],
+          "write": [
+            {
+              "directory": "{artifact}"
+            }
+          ],
+          "deny-all-writes": true,
+          "execute": [
+            "/usr/bin/env",
+            "{python}",
+            "{python-real}"
+          ]
+        }
+      },
+      "services": {
+        "lock": "{home}/.config/runbox/service-locks/datamixxer-hf.lock",
+        "processes": [
+          {
+            "argv": [
+              "{broker-python}",
+              "-I",
+              "-S",
+              "{hf-broker}",
+              "hf-gateway",
+              "--runtime-file",
+              "{hf-service-runtime}",
+              "--owner",
+              "tsilva",
+              "--repo-id",
+              "{argument-4}",
+              "--identity-if-unset",
+              "--repo-type",
+              "dataset",
+              "--port",
+              "19416",
+              "--ca-file",
+              "{upstream-ca}",
+              "--allow-upload",
+              "--storage-host",
+              "cdn-lfs.hf.co",
+              "--storage-host",
+              "cdn-lfs-us-1.hf.co",
+              "--storage-host",
+              "cdn-lfs-eu-1.hf.co",
+              "--storage-host",
+              "transfer.xethub.hf.co",
+              "--storage-host",
+              "transfer.xethub-eu.hf.co",
+              "--storage-host",
+              "s3.us-east-1.amazonaws.com",
+              "--storage-host",
+              "s3.eu-west-3.amazonaws.com",
+              "--storage-host",
+              "aws.cdn.hf.co",
+              "--storage-host",
+              "us.aws.cdn.hf.co",
+              "--storage-host",
+              "us-east-1.aws.cdn.hf.co",
+              "--storage-host",
+              "us-west-2.aws.cdn.hf.co",
+              "--storage-host",
+              "eu-west-3.aws.cdn.hf.co",
+              "--storage-host",
+              "ap-southeast-1.aws.cdn.hf.co",
+              "--storage-host",
+              "us.gcp.cdn.hf.co",
+              "--storage-host",
+              "us-east1.us.gcp.cdn.hf.co",
+              "--storage-host",
+              "us-central1.us.gcp.cdn.hf.co",
+              "--storage-host",
+              "us-west4.us.gcp.cdn.hf.co",
+              "--storage-host",
+              "europe-west4.us.gcp.cdn.hf.co",
+              "--storage-host",
+              "asia-southeast1.us.gcp.cdn.hf.co"
+            ],
+            "cwd": "/",
+            "ready": {
+              "ready": true,
+              "service": "scoped-huggingface"
+            },
+            "timeout": 10
+          }
+        ]
+      },
+      "probe": {
+        "execution": {
+          "sandbox": "macos-command",
+          "command": "hf-check",
+          "argv": [
+            "{python}",
+            "-I",
+            "-S",
+            "-B",
+            "{release}/runbox.pyz",
+            "--command-child"
+          ],
+          "probe-argv": [
+            "{python}",
+            "-I",
+            "-S",
+            "-B",
+            "{release}/runbox.pyz",
+            "--command-child"
+          ],
+          "arguments": [
+            []
+          ],
+          "integrity": {
+            "files": []
+          },
+          "permissions": {
+            "read": [
+              {
+                "directory": "{python-root}"
+              },
+              {
+                "directory": "{release}"
+              },
+              {
+                "directory": "{hf-sdk}"
+              },
+              {
+                "file": "{ca-file}"
+              }
+            ],
+            "write": [],
+            "deny-all-writes": true,
+            "execute": [
+              "/usr/bin/env",
+              "{python}",
+              "{python-real}"
+            ]
+          },
+          "client": {
+            "type": "python",
+            "probe": {
+              "checks": [
+                {
+                  "path": [
+                    "name"
+                  ],
+                  "equals": "tsilva"
+                },
+                {
+                  "path": [
+                    "type"
+                  ],
+                  "equals": "user"
+                }
+              ]
+            }
+          }
+        },
+        "http": {
+          "base-url": "http://127.0.0.1:19416",
+          "credential-variable": "HF_TOKEN",
+          "placeholder": "huggingface_write_proxy_placeholder",
+          "routes": [
+            {
+              "method": "GET",
+              "path": "/api/whoami-v2"
+            }
+          ],
+          "probe": "/api/whoami-v2"
+        }
+      }
+    },
+    "hf-publish-cache": {
+      "ready": true,
+      "provider": {
+        "type": "infisical",
+        "instance": "https://app.infisical.com",
+        "project-id": "5078c850-3f93-46d8-8afe-82107df8b931",
+        "access-bundle": "local-datamixxer-hf-publisher",
+        "source": {
+          "project-id": "cba79865-b229-4181-909b-0da11a052799",
+          "environment": "prod",
+          "secret-path": "/huggingface-write-mac"
+        }
+      },
+      "session": {
+        "ttl": "30m",
+        "proxy": "127.0.0.1:8283"
+      },
+      "environment": {
+        "HF_TOKEN": "huggingface_write_proxy_placeholder",
+        "HF_ENDPOINT": "http://127.0.0.1:19416",
+        "HF_HUB_DISABLE_IMPLICIT_TOKEN": "1",
+        "HF_HUB_DISABLE_XET": "1",
+        "HF_HUB_DISABLE_TELEMETRY": "1",
+        "HF_HUB_DISABLE_PROGRESS_BARS": "1"
+      },
+      "execution": {
+        "sandbox": "macos-command",
+        "command": "datamixxer",
+        "argv": [
+          "{python}",
+          "-I",
+          "-S",
+          "-B",
+          "{release}/runbox.pyz",
+          "--command-child"
+        ],
+        "arguments": [
+          [
+            "publish",
+            {
+              "pattern": ".datamixxer/mixes/[A-Za-z0-9_][A-Za-z0-9_./-]{0,511}"
+            },
+            "--repo-id",
+            {
+              "pattern": "tsilva/[A-Za-z0-9_][A-Za-z0-9_.-]{0,95}"
+            }
+          ],
+          [
+            "publish",
+            {
+              "pattern": ".datamixxer/mixes/[A-Za-z0-9_][A-Za-z0-9_./-]{0,511}"
+            },
+            "--repo-id",
+            {
+              "pattern": "tsilva/[A-Za-z0-9_][A-Za-z0-9_.-]{0,95}"
+            },
+            "--private"
+          ]
+        ],
+        "cwd": "repo",
+        "integrity": {
+          "files": [
+            "pyproject.toml",
+            "uv.lock",
+            "src/datamixxer/__init__.py",
+            "src/datamixxer/cli.py",
+            "src/datamixxer/hub.py",
+            "src/datamixxer/io.py",
+            "src/datamixxer/mix.py",
+            "src/datamixxer/standards.py"
+          ]
+        },
+        "client": {
+          "type": "python",
+          "entrypoint": "datamixxer.cli:main"
+        },
+        "outputs": {
+          "artifact": {
+            "argument": 2,
+            "when-prefix": [
+              "datamixxer",
+              "publish"
+            ],
+            "kind": "working-directory",
+            "within": ".datamixxer/mixes",
+            "relative-to": "repo",
+            "separate-from": [],
+            "exclude": []
+          }
+        },
+        "permissions": {
+          "read": [
+            {
+              "directory": "{python-root}"
+            },
+            {
+              "directory": "{release}"
+            },
+            {
+              "directory": "{hf-sdk}"
+            },
+            {
+              "file": "{ca-file}"
+            },
+            {
+              "file": "{repo}"
+            },
+            {
+              "directory": "{repo}/src"
+            },
+            {
+              "directory": "{artifact}"
+            }
+          ],
+          "write": [
+            {
+              "directory": "{artifact}"
+            }
+          ],
+          "deny-all-writes": true,
+          "execute": [
+            "/usr/bin/env",
+            "{python}",
+            "{python-real}"
+          ]
+        }
+      },
+      "services": {
+        "lock": "{home}/.config/runbox/service-locks/datamixxer-hf.lock",
+        "processes": [
+          {
+            "argv": [
+              "{broker-python}",
+              "-I",
+              "-S",
+              "{hf-broker}",
+              "hf-gateway",
+              "--runtime-file",
+              "{hf-service-runtime}",
+              "--owner",
+              "tsilva",
+              "--repo-id",
+              "{argument-4}",
+              "--identity-if-unset",
+              "--repo-type",
+              "dataset",
+              "--port",
+              "19416",
+              "--ca-file",
+              "{upstream-ca}",
+              "--allow-upload",
+              "--storage-host",
+              "cdn-lfs.hf.co",
+              "--storage-host",
+              "cdn-lfs-us-1.hf.co",
+              "--storage-host",
+              "cdn-lfs-eu-1.hf.co",
+              "--storage-host",
+              "transfer.xethub.hf.co",
+              "--storage-host",
+              "transfer.xethub-eu.hf.co",
+              "--storage-host",
+              "s3.us-east-1.amazonaws.com",
+              "--storage-host",
+              "s3.eu-west-3.amazonaws.com",
+              "--storage-host",
+              "aws.cdn.hf.co",
+              "--storage-host",
+              "us.aws.cdn.hf.co",
+              "--storage-host",
+              "us-east-1.aws.cdn.hf.co",
+              "--storage-host",
+              "us-west-2.aws.cdn.hf.co",
+              "--storage-host",
+              "eu-west-3.aws.cdn.hf.co",
+              "--storage-host",
+              "ap-southeast-1.aws.cdn.hf.co",
+              "--storage-host",
+              "us.gcp.cdn.hf.co",
+              "--storage-host",
+              "us-east1.us.gcp.cdn.hf.co",
+              "--storage-host",
+              "us-central1.us.gcp.cdn.hf.co",
+              "--storage-host",
+              "us-west4.us.gcp.cdn.hf.co",
+              "--storage-host",
+              "europe-west4.us.gcp.cdn.hf.co",
+              "--storage-host",
+              "asia-southeast1.us.gcp.cdn.hf.co"
+            ],
+            "cwd": "/",
+            "ready": {
+              "ready": true,
+              "service": "scoped-huggingface"
+            },
+            "timeout": 10
+          }
+        ]
+      },
+      "probe": {
+        "execution": {
+          "sandbox": "macos-command",
+          "command": "hf-check",
+          "argv": [
+            "{python}",
+            "-I",
+            "-S",
+            "-B",
+            "{release}/runbox.pyz",
+            "--command-child"
+          ],
+          "probe-argv": [
+            "{python}",
+            "-I",
+            "-S",
+            "-B",
+            "{release}/runbox.pyz",
+            "--command-child"
+          ],
+          "arguments": [
+            []
+          ],
+          "integrity": {
+            "files": []
+          },
+          "permissions": {
+            "read": [
+              {
+                "directory": "{python-root}"
+              },
+              {
+                "directory": "{release}"
+              },
+              {
+                "directory": "{hf-sdk}"
+              },
+              {
+                "file": "{ca-file}"
+              }
+            ],
+            "write": [],
+            "deny-all-writes": true,
+            "execute": [
+              "/usr/bin/env",
+              "{python}",
+              "{python-real}"
+            ]
+          },
+          "client": {
+            "type": "python",
+            "probe": {
+              "checks": [
+                {
+                  "path": [
+                    "name"
+                  ],
+                  "equals": "tsilva"
+                },
+                {
+                  "path": [
+                    "type"
+                  ],
+                  "equals": "user"
+                }
+              ]
+            }
+          }
+        },
+        "http": {
+          "base-url": "http://127.0.0.1:19416",
+          "credential-variable": "HF_TOKEN",
+          "placeholder": "huggingface_write_proxy_placeholder",
+          "routes": [
+            {
+              "method": "GET",
+              "path": "/api/whoami-v2"
+            }
+          ],
+          "probe": "/api/whoami-v2"
+        }
+      }
+    }
+  }
+}

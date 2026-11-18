@@ -7,7 +7,14 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any, Callable
 
-from datamixxer.hub import HubCheck, check_hub_access, preflight_upload, repo_url, upload_folder
+from datamixxer.hub import (
+    HubCheck,
+    authentication_options,
+    check_hub_access,
+    preflight_upload,
+    repo_url,
+    upload_folder,
+)
 from datamixxer.io import read_json, read_yaml, write_json, write_jsonl, write_yaml
 from datamixxer.standards import (
     artifact_version,
@@ -128,6 +135,7 @@ def stream_rows(
 
     disable_progress_bar()
     dataset = load_dataset(dataset_id, config, split=split, streaming=True,
+                           **authentication_options(),
                            **({"revision": revision} if revision else {}))
     shuffled = dataset.shuffle(seed=seed, buffer_size=buffer_size)
     yield from shuffled
@@ -291,6 +299,7 @@ def check_source_access(config: dict[str, Any]) -> list[str]:
         try:
             splits = get_dataset_split_names(
                 source.dataset_id, config_name=source.config,
+                **authentication_options(),
                 **({"revision": source.revision} if source.revision else {}),
             )
         except Exception as exc:
@@ -372,7 +381,7 @@ def inspect_dataset(dataset_id: str, config: str | None = None) -> DatasetInspec
     from datasets import get_dataset_config_names, get_dataset_split_names
 
     try:
-        configs = get_dataset_config_names(dataset_id)
+        configs = get_dataset_config_names(dataset_id, **authentication_options())
     except Exception:
         configs = []
 
@@ -386,7 +395,9 @@ def inspect_dataset(dataset_id: str, config: str | None = None) -> DatasetInspec
 
     splits_by_config: dict[str | None, list[str]] = {}
     for config_name in selected_configs:
-        splits_by_config[config_name] = get_dataset_split_names(dataset_id, config_name=config_name)
+        splits_by_config[config_name] = get_dataset_split_names(
+            dataset_id, config_name=config_name, **authentication_options()
+        )
     return DatasetInspection(
         dataset_id=dataset_id,
         configs=[str(item) for item in configs],

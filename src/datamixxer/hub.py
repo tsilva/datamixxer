@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,12 +19,22 @@ def repo_url(repo_id: str, repo_type: str) -> str:
     return f"https://huggingface.co/{path_prefix}{repo_id}"
 
 
+def authentication_options() -> dict[str, str]:
+    """Pass an explicit environment token even when SDK implicit auth is disabled."""
+    if "HF_TOKEN" not in os.environ:
+        return {}
+    token = os.environ["HF_TOKEN"]
+    if not token or len(token) > 16384 or any(character.isspace() for character in token):
+        raise RuntimeError("The explicitly supplied Hugging Face token is invalid")
+    return {"token": token}
+
+
 def _api():
     try:
         from huggingface_hub import HfApi
     except ImportError as exc:
         raise RuntimeError("huggingface_hub is required for Hub uploads") from exc
-    return HfApi()
+    return HfApi(**authentication_options())
 
 
 def preflight_upload(*, repo_id: str, repo_type: str, private: bool = False) -> None:

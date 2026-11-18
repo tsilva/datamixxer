@@ -190,6 +190,9 @@ uv run --frozen ruff check .                                               # run
   `publish --check` before a long build to verify authentication and target repo
   access. The check is non-mutating; upload commands create the target repo when
   needed.
+  An explicitly supplied `HF_TOKEN` is passed to both Hub and dataset clients,
+  including when implicit SDK authentication is disabled. Without it, the SDK's
+  usual cached-login behavior remains available.
 - Streaming commands close source iterators after collecting the requested rows
   and suppress Hugging Face progress bars; datamixxer prints one progress stream
   per source bucket.
