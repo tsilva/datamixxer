@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from time import perf_counter
 from typing import Any, Callable
 
 from datamixxer.hub import (
+    PUBLISH_SETTINGS,
+    PUBLISH_SETTINGS_TEMP,
     HubCheck,
     authentication_options,
     check_hub_access,
@@ -232,6 +237,7 @@ def validate_config(config: dict[str, Any], *, require_hub: bool = False) -> Non
     hub = output.get("hub", {})
     if hub is not None and not isinstance(hub, dict):
         raise ValueError("`output.hub` must be a mapping when provided")
+    _validate_commit_message((hub or {}).get("commit_message"))
     if require_hub and not standard_repo_id(
         hub or {},
         fallback_name=str(config["id"]),
@@ -1106,6 +1112,8 @@ def push_mix_artifact(
     if not resolved_repo_id:
         raise KeyError("hub.repo_id or --repo-id is required for publishing")
     resolved_private = bool(private) if private is not None else False
+    if commit_message is None:
+        commit_message = _read_publish_message(artifact.path)
     resolved_commit = commit_message or "Upload datamixxer dataset"
     upload_url = repo_url(str(resolved_repo_id), "dataset")
     previous_manifest = json.loads(json.dumps(manifest, ensure_ascii=False))
@@ -1162,6 +1170,50 @@ def push_mix(
     )
 
 
+def _validate_commit_message(message: Any) -> str | None:
+    if message is not None and (not isinstance(message, str) or len(message) > 4096):
+        raise ValueError("A configured Hub commit message must be text of at most 4096 characters")
+    return message
+
+
+def _read_publish_message(artifact: Path) -> str | None:
+    path = artifact / PUBLISH_SETTINGS
+    if path.is_symlink():
+        raise ValueError("Local publish settings cannot be a symlink")
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError:
+        return None
+    with os.fdopen(descriptor, "rb") as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise ValueError("Local publish settings must be a regular file")
+        raw = stream.read(32769)
+    if len(raw) > 32768:
+        raise ValueError("Local publish settings exceed the size limit")
+    settings = json.loads(raw)
+    if not isinstance(settings, dict) or set(settings) != {"commit_message"}:
+        raise ValueError("Invalid local publish settings")
+    return _validate_commit_message(settings["commit_message"])
+
+
+def _save_publish_message(artifact: Path, message: str | None) -> None:
+    if _read_publish_message(artifact) == message:
+        return
+    temporary = None
+    try:
+        with NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=artifact, prefix=PUBLISH_SETTINGS_TEMP,
+            suffix=".tmp", delete=False,
+        ) as stream:
+            temporary = Path(stream.name)
+            json.dump({"commit_message": message}, stream, ensure_ascii=False)
+            stream.write("\n")
+        temporary.replace(artifact / PUBLISH_SETTINGS)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 def build_mix(config_path: str | Path, *, push: bool | None = None, force: bool = False) -> MixArtifact:
     config = validate_config_file(config_path)
     output = config.get("output") or {}
@@ -1188,6 +1240,7 @@ def build_mix(config_path: str | Path, *, push: bool | None = None, force: bool 
         print(f"Reusing existing mix {hash_value[:12]} at {artifact.path}")
         print("Sampling inputs are unchanged. Use --force to rebuild anyway.")
 
+    _save_publish_message(artifact.path, (output.get("hub") or {}).get("commit_message"))
     if should_push:
         hub = output["hub"]
         print(

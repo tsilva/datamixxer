@@ -4,6 +4,9 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+PUBLISH_SETTINGS = ".datamixxer-publish.json"
+PUBLISH_SETTINGS_TEMP = ".datamixxer-publish-"
+
 
 @dataclass(frozen=True)
 class HubCheck:
@@ -96,5 +99,6 @@ def upload_folder(
         repo_type=repo_type,
         folder_path=str(folder_path),
         commit_message=commit_message,
+        ignore_patterns=[PUBLISH_SETTINGS, f"{PUBLISH_SETTINGS_TEMP}*.tmp"],
     )
     return repo_url(repo_id, repo_type)

@@ -811,6 +811,54 @@ def test_push_mix_updates_manifest_before_upload(monkeypatch, tmp_path) -> None:
     assert saved["hub"]["pushed"] is True
 
 
+def test_offline_build_keeps_custom_publish_message_and_refreshes_it_without_resampling(
+    monkeypatch, tmp_path
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "data.jsonl").write_text('{"prompt":"fixture"}\n', encoding="utf-8")
+    config = {
+        "id": "fixture",
+        "sources": [{"dataset_id": str(source), "split": "train", "count": 1}],
+        "output": {
+            "store_dir": str(tmp_path / "mixes"),
+            "push_to_hub": True,
+            "hub": {"repo_id": "owner/fixture", "commit_message": "Preparação — edição 1"},
+        },
+    }
+    config_path = tmp_path / "mix.yaml"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    artifact = build_mix(config_path, push=False)
+    manifest_path = artifact.path / "manifest.json"
+    before = manifest_path.read_bytes()
+    assert json.loads((artifact.path / hub.PUBLISH_SETTINGS).read_text()) == {
+        "commit_message": "Preparação — edição 1",
+    }
+    assert artifact.manifest["hub"]["pushed"] is False
+
+    def unexpected_collect(*_args, **_kwargs):
+        pytest.fail("Refresh must not sample again")
+
+    monkeypatch.setattr(mix, "collect_mix", unexpected_collect)
+    config["output"]["hub"]["commit_message"] = "Preparação — edição 2"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    assert build_mix(config_path, push=False).path == artifact.path
+    assert manifest_path.read_bytes() == before
+    messages = []
+    monkeypatch.setattr(mix, "preflight_upload", lambda **_kwargs: None)
+    monkeypatch.setattr(mix, "upload_folder", lambda **kwargs: messages.append(kwargs["commit_message"]))
+    push_mix(str(artifact.path))
+    push_mix(str(artifact.path), commit_message="Override")
+    del config["output"]["hub"]["commit_message"]
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    before = manifest_path.read_bytes()
+    assert build_mix(config_path, push=False).path == artifact.path
+    assert manifest_path.read_bytes() == before
+    push_mix(str(artifact.path))
+    assert messages == ["Preparação — edição 2", "Override", "Upload datamixxer dataset"]
+    assert not list(artifact.path.glob(".datamixxer-publish-*.tmp"))
+
+
 def test_resolve_mix_artifact_rejects_ambiguous_ids(tmp_path) -> None:
     store_dir = tmp_path / "store"
     for hash_value in ("abcdef123456", "123456abcdef"):

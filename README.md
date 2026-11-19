@@ -121,7 +121,8 @@ Common optional fields:
 - `output.push_to_hub`: whether `build` should upload by default.
 - `output.hub.repo_id` or `output.hub.owner`: Hub target for publishing.
 - `output.hub.private`: create or update the target Hub repo as private.
-- `output.hub.commit_message`: Hub upload commit message.
+- `output.hub.commit_message`: Default commit message for later publishing. A local
+  build saves it with the artifact, and `publish --commit-message` can override it.
 - Source `train_count` and `test_count`: advanced alternative to `count` plus `split.test_size`.
 - Source `restyle`: legacy compatibility flag copied into every row from that source.
 
